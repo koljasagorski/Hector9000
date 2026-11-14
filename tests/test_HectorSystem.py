@@ -58,3 +58,13 @@ def test_config_overrides_command():
 
 def test_runner_error_is_swallowed():
     assert make(FakeRunner(fail=True)).handle(hs.REBOOT) is False
+
+
+def test_default_runner_reports_failing_command():
+    system = hs.HectorSystem(commands={hs.REBOOT: ["false"]}, log=lambda m: None)
+    assert system.handle(hs.REBOOT) is False
+
+
+def test_default_runner_reports_started_command():
+    system = hs.HectorSystem(commands={hs.REBOOT: ["true"]}, log=lambda m: None)
+    assert system.handle(hs.REBOOT) is True

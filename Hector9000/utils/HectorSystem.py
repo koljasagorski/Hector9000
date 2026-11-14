@@ -34,11 +34,17 @@ DEFAULT_COMMANDS = {
 }
 
 
-def _default_runner(argv):
+def _default_runner(argv, grace=2.0):
+    """Start ``argv`` detached. Raises if it fails right away.
+
+    Waits up to ``grace`` seconds so a refused ``sudo -n`` or a pkill that
+    found nothing is reported as an error instead of "ok". A command still
+    running after that (e.g. the reboot in progress) counts as started.
+    """
     env = dict(os.environ)
     # Started via nohup/rc.local the runtime dir may be missing.
     env.setdefault("XDG_RUNTIME_DIR", "/run/user/%d" % os.getuid())
-    subprocess.Popen(
+    proc = subprocess.Popen(
         argv,
         env=env,
         stdin=subprocess.DEVNULL,
@@ -46,6 +52,12 @@ def _default_runner(argv):
         stderr=subprocess.DEVNULL,
         start_new_session=True,
     )
+    try:
+        code = proc.wait(timeout=grace)
+    except subprocess.TimeoutExpired:
+        return
+    if code != 0:
+        raise RuntimeError("exit code %d" % code)
 
 
 class HectorSystem:
