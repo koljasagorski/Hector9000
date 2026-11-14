@@ -41,7 +41,16 @@ def test_broken_messages_are_ignored():
                            ("Hector9000/LEDStrip/ambient", "disco"),
                            ("Hector9000/doseDrink/progress", "abc"),
                            ("Hector9000/LEDStrip/dosedrink", "a,b,c"),
-                           ("Hector9000/whatever", b"\xff")]:
+                           ("Hector9000/whatever", b"\xff"),
+                           ("Hector9000/LEDStrip/dosedrink", "inf,1e999,nan,0"),
+                           ("Hector9000/doseDrink/progress", "inf"),
+                           ("Hector9000/LEDStrip/theme", "[" * 100000 + "]" * 100000),
+                           ("Hector9000/LEDStrip/theme", '{"id": "x", "colors": "#010203"}'),
+                           ("Hector9000/LEDStrip/theme", '{"id": "x", "colors": [1, 2]}'),
+                           ("Hector9000/LEDStrip/theme", '["pink"]'),
+                           ("Hector9000/LEDStrip/theme", "{" + '"a":' * 200 + "1" + "}" * 200),
+                           ("Hector9000/LEDStrip/theme", "{" + "[" * 1000),
+                           ("Hector9000/LEDStrip/theme", "{" + '"a":{' * 5000 + "}" * 5001)]:
         e.handle(topic, payload, 1)
     assert e.theme == "dark" and e.ambient == "theme"
     assert len(e.frame(2)) == 15

@@ -40,6 +40,8 @@ THEME_PALETTES = {
 
 AMBIENT_MODES = ("theme", "random", "idle", "off")
 
+MAX_PAYLOAD = 1024   # longer messages are ignored (anonymous broker)
+
 # how long one-shot events stay before falling back to the ambient mode
 EVENT_SECONDS = {
     "select": 60.0,
@@ -168,10 +170,14 @@ class LEDEngine:
         theme, colors = str(payload).strip(), None
         if theme.startswith("{"):
             data = json.loads(theme)
+            if not isinstance(data, dict):
+                raise ValueError("theme JSON must be an object")
             theme = str(data.get("id", ""))
             colors = data.get("colors")
+            if colors is not None and not isinstance(colors, list):
+                raise ValueError("colors must be a list")
         if colors:
-            self.palette = [hex_to_rgb(c) for c in colors][:6]
+            self.palette = [hex_to_rgb(c) for c in colors[:6]]
         elif theme in THEME_PALETTES:
             self.palette = palette_from_keys(THEME_PALETTES[theme])
         else:
@@ -201,6 +207,8 @@ class LEDEngine:
         if isinstance(payload, bytes):
             payload = payload.decode("utf-8", "replace")
         payload = str(payload)
+        if len(payload) > MAX_PAYLOAD:
+            return
         t = topic.split("Hector9000/", 1)[-1]
         try:
             if t == "LEDStrip/theme":
@@ -240,7 +248,8 @@ class LEDEngine:
                 self.start_event("valves", now)
             elif t == "system/reboot":
                 self.start_event("shutdown", now)
-        except (ValueError, TypeError, KeyError, IndexError):
+        except Exception:
+            # a broken or hostile message must never stop the LED server
             pass
 
     # ----------------------------------------------------------- output --

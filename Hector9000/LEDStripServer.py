@@ -95,8 +95,11 @@ def main():
             client.subscribe(topic)
 
     def on_message(client, userdata, msg):
-        with lock:
-            engine.handle(msg.topic, msg.payload, time.monotonic())
+        try:
+            with lock:
+                engine.handle(msg.topic, msg.payload, time.monotonic())
+        except Exception as e:  # never let one message kill the MQTT thread
+            log("ignored message on %s: %s" % (msg.topic, e))
 
     client = mqtt.Client(client_id="HectorLED")
     client.on_connect = on_connect
