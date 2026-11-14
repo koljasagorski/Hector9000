@@ -1,3 +1,5 @@
+import re
+
 from Hector9000.utils import HectorSystem as hs
 
 
@@ -27,7 +29,11 @@ def test_kiosk_exit_sets_flag_and_kills_kiosk_profile():
     assert make(runner).handle(hs.KIOSK_EXIT) is True
     script = runner.calls[0][-1]
     assert hs.KIOSK_EXIT_FLAG in script
-    assert hs.KIOSK_PROFILE_MARKER in script
+    pattern = re.search(r"pkill -f '([^']+)'", script).group(1)
+    # matches the kiosk Chromium, but not the sh -c process carrying the pattern
+    assert re.search(pattern, "chromium --user-data-dir=/home/pi/.cache/"
+                     + hs.KIOSK_PROFILE_MARKER)
+    assert not re.search(pattern, script)
 
 
 def test_retained_message_is_ignored():

@@ -26,7 +26,10 @@ DEFAULT_COMMANDS = {
     REBOOT: ["sudo", "-n", "systemctl", "reboot"],
     KIOSK_EXIT: [
         "sh", "-c",
-        "touch %s; pkill -f %s" % (KIOSK_EXIT_FLAG, KIOSK_PROFILE_MARKER),
+        # "[p]" keeps the pattern from matching this sh process itself
+        "touch %s; pkill -f '%s'" % (
+            KIOSK_EXIT_FLAG,
+            KIOSK_PROFILE_MARKER.replace("profile", "[p]rofile")),
     ],
 }
 
