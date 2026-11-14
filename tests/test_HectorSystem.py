@@ -1,3 +1,5 @@
+import os
+
 from Hector9000.utils import HectorSystem as hs
 
 
@@ -55,6 +57,18 @@ def test_kiosk_exit_flag_refuses_symlinks(tmp_path):
     assert system.handle(hs.KIOSK_EXIT) is False
     assert not (real / "exit").exists()
     assert runner.calls == []
+
+
+def test_kiosk_exit_flag_existing_file_is_fine_fifo_is_refused(tmp_path):
+    (tmp_path / "kiosk").mkdir()
+    flag = tmp_path / "kiosk" / "exit"
+    flag.write_text("")
+    runner = FakeRunner()
+    assert make(runner, kiosk_exit_flag=str(flag)).handle(hs.KIOSK_EXIT) is True
+    flag.unlink()
+    os.mkfifo(str(flag))
+    # must not block on the FIFO, must refuse it
+    assert make(runner, kiosk_exit_flag=str(flag)).handle(hs.KIOSK_EXIT) is False
 
 
 def test_retained_message_is_ignored():

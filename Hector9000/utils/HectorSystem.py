@@ -10,6 +10,7 @@
 #
 
 import os
+import stat
 import subprocess
 
 REBOOT = "reboot"
@@ -45,9 +46,14 @@ def write_kiosk_exit_flag(path=KIOSK_EXIT_FLAG):
     except FileNotFoundError:
         return False
     try:
-        fd = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW, 0o644,
-                     dir_fd=dfd)
+        # O_EXCL: never open an existing object (symlink, FIFO, device ...)
+        fd = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW
+                     | os.O_CLOEXEC | os.O_NONBLOCK, 0o644, dir_fd=dfd)
         os.close(fd)
+    except FileExistsError:
+        st = os.stat(name, dir_fd=dfd, follow_symlinks=False)
+        if not stat.S_ISREG(st.st_mode):
+            raise OSError("%s exists and is not a regular file" % path)
     finally:
         os.close(dfd)
     return True
