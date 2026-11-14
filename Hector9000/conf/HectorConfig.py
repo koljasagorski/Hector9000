@@ -49,7 +49,13 @@ config = {
     },
     "ws2812": {
         # D18
-        "DIN": 12
+        "DIN": 12,
+        "output": "ws2812",       # "ws2812" (strip on the Pi) or "console" (test)
+        "count": 15,              # LEDs in total
+        "base": 5,                # first LEDs: under the glass
+        "column_reversed": False,  # True if the column's first LED is at the top
+        "brightness": 0.5,        # 0..1, caps power draw and glare
+        "idle_minutes": 5         # dim idle animation after no touch (0 = never)
     },
     "mqtt": {
         "SERVER": "localhost",

@@ -206,8 +206,8 @@ class HectorController:
               ", msg: " + str(msg.payload))
         try:
             currentTopic = msg.topic
-            if "/Hardware/" in currentTopic:
-                return  # ignore own Hardware calls
+            if "/Hardware/" in currentTopic or "/LEDStrip/" in currentTopic:
+                return  # ignore own Hardware calls and LED messages (LED server)
             elif currentTopic.endswith("/progress"):
                 return  # ignore our own progress messages
             elif currentTopic.endswith("/return"):

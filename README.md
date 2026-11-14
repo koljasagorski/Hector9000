@@ -114,6 +114,32 @@ and uncomment:
 
 
 
+LED strip animations
+---
+
+`Hector9000/LEDStripServer.py` (started by `start.sh` with sudo, log in `LEDStrip.out`)
+renders animations for the WS2812 strip; the logic lives hardware-free in
+`Hector9000/utils/LEDAnimations.py`.
+
+- **Ambient mode** (WebUI settings "LED: …"): `theme` (slow wave in the colours of
+  the selected WebUI theme), `random` (random effect and congress palette every
+  20-40 s), `idle` (dim breathing), `off`.
+- **Auto idle:** after `idle_minutes` without a touch on the WebUI the strip dims; a touch wakes it.
+- **Events** (override the ambient mode): drink selected (pulse), dosing (column fills
+  bottom-up in the drink colour with the real progress, base pulses), drink finished
+  (sparkle), clean/dry (water wave), open/close all valves (chase), reboot (fade out).
+
+Configuration in `HectorConfig.py` under `"ws2812"`: `count`, `base` (LEDs under the
+glass), `column_reversed`, `brightness`, `idle_minutes`, `output`.
+Without hardware: `python3 Hector9000/LEDStripServer.py --console` shows the strip in the terminal.
+
+MQTT topics (`Hector9000/LEDStrip/…`): `theme` (retained, theme id or
+`{"id":…,"colors":["#hex",…]}`), `ambient` (retained), `activity`, `select`, `deselect`,
+plus the existing `dosedrink`, `drinkfinish`, `standart`, `standby`. The server also listens
+to `Hector9000/doseDrink/progress`, `cleanMe`, `dryMe`, `openAllValves`, `closeAllValves`,
+`system/reboot`. A WLED (ESP32) output is planned as an alternative to the GPIO strip.
+
+
 System actions from the WebUI (reboot / leave fullscreen)
 ---
 

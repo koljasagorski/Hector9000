@@ -1,110 +1,122 @@
+#!/usr/bin/env python3
+# -*- coding: utf8 -*-
+##
+#   LEDStripServer.py     Drives the WS2812 strip from MQTT messages.
+#
+#   Listens to the WebUI (theme, ambient mode, activity, drink selected),
+#   to the controller (dosing progress, drink finished) and to cleaning /
+#   valve / reboot commands. LEDEngine (utils/LEDAnimations.py) turns that
+#   into frames; an output writes them to the hardware.
+#
+#   Outputs (HectorConfig "ws2812" -> "output"):
+#     ws2812   strip on GPIO 18 via adafruit neopixel (needs root, see start.sh)
+#     console  prints the frame as coloured blocks (development, no hardware)
+#   WLED (ESP32 via MQTT) can be added later as another output.
+#
+#   Usage: python3 LEDStripServer.py [--console]
+#
+
+import sys
+import threading
+import time
+
 import paho.mqtt.client as mqtt
 
-from Hector9000.utils.Simple_LED_Connector import Simple_LED_Connector as LEDStrip
+from Hector9000.conf import HectorConfig as HC
+from Hector9000.utils.LEDAnimations import LEDEngine
 
-MQTT_Server = "localhost"
-port = 1883
-MainTopic = "Hector9000/LEDStrip/"
+MQTT_SERVER = "localhost"
+MQTT_PORT = 1883
+FPS = 30
 
-
-def debugOut(message):
-    print("LED_Strip_Server: => " + message)
-
-
-def on_message(client, userdata, msg):
-    print("message recieved")
-    pixels.drinkfinish()
-    return
-    print("err")
-    debugOut("abc")
-    # print("LED_Server on_message: " + str(mgs.topic) + " , " + msg.payload.decode("utf-8"))
-    topic = msg.topic
-    topic = topic.replace(MainTopic, "")
-    print("topic: " + topic)
-    if topic == "standart":
-        print("standart")
-        args = tuple(msg.payload.decode("utf-8").split(","))
-        if msg.payload.decode("utf-8") == "":
-            pixels.standart()
-        elif len(args) == 1:
-            pixels.standart(type=args[0])
-        elif len(args) == 2:
-            pixels.standart(type=args[0], color=tuple(
-                map(int, args[1].split(";"))))
-        else:
-            debugOut("Error to many args for standart")
-    elif topic == "standby":
-        print("standby")
-        args = tuple(msg.payload.decode("utf-8").split(","))
-        if msg.payload.decode("utf-8") == "":
-            pixels.standby()
-        elif len(args) == 1:
-            pixels.standby(type=args[0])
-        elif len(args) == 2:
-            pixels.standby(type=args[0], color=tuple(
-                map(int, args[1].split(";"))))
-        else:
-            debugOut("Error to many args for standby")
-    elif topic == "dosedrink":
-        print("dosedrink")
-        args = list(msg.payload.decode("utf-8").split(","))
-        if msg.payload.decode("utf-8") == "":
-            print("no args")
-            pixels.dosedrink()
-        elif len(args) == 1:
-            print("one arg")
-            pixels.dosedrink(type=args[0])
-        elif len(args) == 2:
-            print("two args")
-            print(args[1])
-            args[1] = args[1].replace("(", "")
-            print(args[1])
-            args[1] = args[1].replace(")", "")
-            print(args[1])
-            # temp = [int(i) for i in args[1].split(";"
-            temp = tuple(map(int, args[1].split(";")))
-            print(temp)
-            pixels.dosedrink(type=args[0], color=temp)
-            print("after dose_drink")
-        else:
-            debugOut("Error to many args for dosedrink")
-    elif topic == "drinkfinish":
-        print("drinkfinish")
-        pixels.finish()
-        return
-    # args = tuple(msg.payload.decode("utf-8").split(","))
-    # if msg.payload.decode("utf-8") is "":
-    #    pixels.finish()
-    # elif len(args) == 1:
-    #    pixels.finish(type=args[0])
-    # elif len(args) == 2:
-    #    pixels.finish(type=args[0], color=tuple(map(int, args[1].split(";"))))
-    # else:
-    #    debugOut("Error to many args for drinkfinish")
-    else:
-        debugOut("Unknown topic")
+TOPICS = [
+    "Hector9000/LEDStrip/#",
+    "Hector9000/doseDrink/progress",
+    "Hector9000/cleanMe",
+    "Hector9000/dryMe",
+    "Hector9000/openAllValves",
+    "Hector9000/closeAllValves",
+    "Hector9000/system/reboot",
+]
 
 
-def on_connect(client, userdata, flags, rc):
-    print("Server connected")
-    print("subb ret1: " + str(client.subscribe(MainTopic + "drinkfinish", 1)))
-    a = MainTopic + "#"
+def log(message):
+    print("LEDStripServer: " + str(message), flush=True)
 
 
-# print("sub ret 2: " + str(client.subscribe(a, 1)))
-# client.publish(MainTopic + "abc", "test")
+class WS2812Output:
 
-def on_subscribe(client, userdata, mid, granted_qos):
-    print("Subscribed to Topic")
+    def __init__(self, count):
+        import board      # only available on the Pi
+        import neopixel
+        self.pixels = neopixel.NeoPixel(board.D18, count, brightness=1.0,
+                                        auto_write=False, pixel_order=neopixel.GRB)
+
+    def show(self, frame):
+        for i, color in enumerate(frame):
+            self.pixels[i] = color
+        self.pixels.show()
 
 
-print("server started")
-pixels = LEDStrip()
-client = mqtt.Client(client_id="HectorLED")
-client.on_message = on_message
-client.on_connect = on_connect
-client.on_subscribe = on_subscribe
-client.connect(MQTT_Server, port, 60)
-client.loop_start()
-while True:
-    pixels.loop()
+class ConsoleOutput:
+
+    def __init__(self, count):
+        self.last = None
+
+    def show(self, frame):
+        if frame == self.last:
+            return
+        self.last = frame
+        blocks = "".join("\x1b[48;2;%d;%d;%dm  " % c for c in frame)
+        sys.stdout.write("\r" + blocks + "\x1b[0m")
+        sys.stdout.flush()
+
+
+OUTPUTS = {"ws2812": WS2812Output, "console": ConsoleOutput}
+
+
+def main():
+    cfg = HC.config.get("ws2812", {})
+    output_name = "console" if "--console" in sys.argv else cfg.get("output", "ws2812")
+    engine = LEDEngine(
+        count=cfg.get("count", 15),
+        base=cfg.get("base", 5),
+        brightness=cfg.get("brightness", 0.5),
+        idle_after=cfg.get("idle_minutes", 5) * 60,
+        column_reversed=cfg.get("column_reversed", False),
+        now=time.monotonic(),
+    )
+    output = OUTPUTS[output_name](engine.count)
+    lock = threading.Lock()
+
+    def on_connect(client, userdata, flags, rc):
+        log("connected to MQTT")
+        for topic in TOPICS:
+            client.subscribe(topic)
+
+    def on_message(client, userdata, msg):
+        with lock:
+            engine.handle(msg.topic, msg.payload, time.monotonic())
+
+    client = mqtt.Client(client_id="HectorLED")
+    client.on_connect = on_connect
+    client.on_message = on_message
+    client.connect_async(MQTT_SERVER, MQTT_PORT, 60)
+    client.loop_start()     # reconnects on its own if the broker restarts
+    log("started, output=%s, %d pixels" % (output_name, engine.count))
+
+    frame_time = 1.0 / FPS
+    while True:
+        start = time.monotonic()
+        with lock:
+            frame = engine.frame(start)
+        try:
+            output.show(frame)
+        except Exception as e:  # keep running, e.g. on a transient SPI/PWM error
+            log("output error: %s" % e)
+            time.sleep(1)
+        time.sleep(max(0.0, frame_time - (time.monotonic() - start)))
+
+
+if __name__ == "__main__":
+    main()

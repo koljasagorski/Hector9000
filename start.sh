@@ -15,4 +15,4 @@ nohup python3 Hector9000/HectorServer.py > Server.out 2>&1 &
 nohup python3 Hector9000/HectorController.py > Controller.out 2>&1 &
 
 echo "Start HectorLED-Server"
-nohup sudo python3 Hector9000/LEDStripServer.py > /dev/null 2>&1 &
+nohup sudo python3 Hector9000/LEDStripServer.py > LEDStrip.out 2>&1 &
