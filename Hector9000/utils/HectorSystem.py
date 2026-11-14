@@ -17,8 +17,10 @@ KIOSK_EXIT = "kiosk_exit"
 
 # Contract with Hector9000WebUI/kiosk.sh: the kiosk launcher stops relaunching
 # Chromium once this flag file exists, and every kiosk Chromium process carries
-# the profile marker in its command line.
-KIOSK_EXIT_FLAG = "/tmp/hector9000-kiosk.exit"
+# the profile marker in its command line. The flag lives in a directory created
+# by kiosk.sh (owned by the kiosk user), so the kiosk can delete it again even
+# when the backend runs as root (sticky /tmp would prevent that otherwise).
+KIOSK_EXIT_FLAG = "/tmp/hector9000-kiosk/exit"
 KIOSK_PROFILE_MARKER = "hector9000-kiosk-profile"
 
 DEFAULT_COMMANDS = {

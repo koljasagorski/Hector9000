@@ -60,7 +60,7 @@ config = {
         # expansion of MQTT payloads). Leave out a key to keep the default
         # from Hector9000/utils/HectorSystem.py, set it to [] to disable it.
         # "reboot": ["sudo", "-n", "systemctl", "reboot"],
-        # "kiosk_exit": ["sh", "-c", "touch /tmp/hector9000-kiosk.exit; "
+        # "kiosk_exit": ["sh", "-c", "touch /tmp/hector9000-kiosk/exit; "
         #                "pkill -f 'hector9000-kiosk-[p]rofile'"],
     }
 }
