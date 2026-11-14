@@ -114,6 +114,27 @@ and uncomment:
 
 
 
+System actions from the WebUI (reboot / leave fullscreen)
+---
+
+The WebUI settings can reboot the Raspberry Pi and leave the kiosk fullscreen.
+Both are handled by `HectorController.py` via MQTT:
+
+| Topic | Action (default command) |
+|---|---|
+| `Hector9000/system/reboot` | `sudo -n systemctl reboot` (needs passwordless sudo, default on Raspberry Pi OS) |
+| `Hector9000/system/kioskExit` | `touch /tmp/hector9000-kiosk.exit; pkill -f hector9000-kiosk-profile` |
+
+The result is published on `<topic>/return` (`ok` / `error`). The payload is
+never used, and retained messages are ignored. The commands can be overridden or
+disabled (`[]`) in `Hector9000/conf/HectorConfig.py` under `"system"`.
+The kiosk-exit contract (flag file and profile marker) matches `kiosk.sh` in
+[Hector9000WebUI](https://github.com/koljasagorski/Hector9000WebUI).
+
+Note: the broker allows anonymous access, so anyone who can reach it on the
+network can trigger these actions (as they already can trigger dosing).
+
+
 ## Info 
 
 If you have some ideas or a fix or something else to make 

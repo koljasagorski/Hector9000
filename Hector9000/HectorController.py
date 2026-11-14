@@ -3,6 +3,8 @@ from Hector9000.conf import mqttTopics
 import json
 from Hector9000.conf import drinks as drinks
 from Hector9000.conf import database as db
+from Hector9000.conf import HectorConfig
+from Hector9000.utils import HectorSystem
 import webcolors
 import paho.mqtt.client as mqtt
 import time
@@ -45,6 +47,8 @@ class HectorController:
         self.hector = remote.HectorRemote()
         self.LED = True
         self.db = db.Database()
+        self.system = HectorSystem.HectorSystem(
+            commands=HectorConfig.config.get("system"), log=debug)
 
     # todo: When drinks are impl in DB this has to be refactored
     def available_drinks_as_JSON(self):
@@ -190,6 +194,10 @@ class HectorController:
             pass
         self.client.loop_write()
 
+    def _do_system_action(self, msg, action):
+        ok = self.system.handle(action, retained=bool(getattr(msg, "retain", False)))
+        self.client.publish(self.get_returnTopic(msg.topic), "ok" if ok else "error")
+
     def dose_callback(self, progress):
         self.client.publish(self.TopicPrefix + "doseDrink/progress", progress)
 
@@ -245,6 +253,10 @@ class HectorController:
             elif currentTopic == self.TopicPrefix + mqttTopics.APITopics.closeAllValves:
                 self.hector.all_valve_close()
                 pass
+            elif currentTopic == self.TopicPrefix + mqttTopics.APITopics.reboot:
+                self._do_system_action(msg, HectorSystem.REBOOT)
+            elif currentTopic == self.TopicPrefix + mqttTopics.APITopics.kioskExit:
+                self._do_system_action(msg, HectorSystem.KIOSK_EXIT)
             else:
                 warning("unknown topic: " + currentTopic +
                         ", msg " + str(msg.payload))

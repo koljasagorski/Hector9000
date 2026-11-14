@@ -13,6 +13,8 @@ class APITopics:
     dryMe = "dryMe"
     openAllValves = "openAllValves"
     closeAllValves = "closeAllValves"
+    reboot = "system/reboot"
+    kioskExit = "system/kioskExit"
 
 class HardwareTopics:
     light_on = "light_on"
