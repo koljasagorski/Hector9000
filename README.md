@@ -123,7 +123,7 @@ Both are handled by `HectorController.py` via MQTT:
 | Topic | Action (default command) |
 |---|---|
 | `Hector9000/system/reboot` | `sudo -n systemctl reboot` (needs passwordless sudo, default on Raspberry Pi OS) |
-| `Hector9000/system/kioskExit` | `touch /tmp/hector9000-kiosk/exit; pkill -f 'hector9000-kiosk-[p]rofile'` |
+| `Hector9000/system/kioskExit` | writes `/tmp/hector9000-kiosk/exit` (no symlinks followed), then `pkill -f hector9000-kiosk-profile` |
 
 The result is published on `<topic>/return` (`ok` / `error`). The payload is
 never used, and retained messages are ignored. The commands can be overridden or

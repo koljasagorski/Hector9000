@@ -1,5 +1,3 @@
-import re
-
 from Hector9000.utils import HectorSystem as hs
 
 
@@ -24,16 +22,39 @@ def test_reboot_runs_default_command():
     assert runner.calls == [["sudo", "-n", "systemctl", "reboot"]]
 
 
-def test_kiosk_exit_sets_flag_and_kills_kiosk_profile():
+def test_kiosk_exit_writes_flag_and_kills_kiosk_profile(tmp_path):
+    (tmp_path / "kiosk").mkdir()
+    flag = tmp_path / "kiosk" / "exit"
     runner = FakeRunner()
-    assert make(runner).handle(hs.KIOSK_EXIT) is True
-    script = runner.calls[0][-1]
-    assert hs.KIOSK_EXIT_FLAG in script
-    pattern = re.search(r"pkill -f '([^']+)'", script).group(1)
-    # matches the kiosk Chromium, but not the sh -c process carrying the pattern
-    assert re.search(pattern, "chromium --user-data-dir=/home/pi/.cache/"
-                     + hs.KIOSK_PROFILE_MARKER)
-    assert not re.search(pattern, script)
+    assert make(runner, kiosk_exit_flag=str(flag)).handle(hs.KIOSK_EXIT) is True
+    assert flag.exists()
+    assert runner.calls == [["pkill", "-f", hs.KIOSK_PROFILE_MARKER]]
+
+
+def test_kiosk_exit_without_kiosk_dir_still_kills(tmp_path):
+    runner = FakeRunner()
+    flag = tmp_path / "missing" / "exit"
+    assert make(runner, kiosk_exit_flag=str(flag)).handle(hs.KIOSK_EXIT) is True
+    assert not flag.exists()
+    assert runner.calls == [["pkill", "-f", hs.KIOSK_PROFILE_MARKER]]
+
+
+def test_kiosk_exit_flag_refuses_symlinks(tmp_path):
+    victim = tmp_path / "victim"
+    (tmp_path / "kiosk").mkdir()
+    (tmp_path / "kiosk" / "exit").symlink_to(victim)
+    runner = FakeRunner()
+    system = make(runner, kiosk_exit_flag=str(tmp_path / "kiosk" / "exit"))
+    assert system.handle(hs.KIOSK_EXIT) is False
+    assert not victim.exists()
+    # symlinked directory is refused as well
+    real = tmp_path / "real"
+    real.mkdir()
+    (tmp_path / "linkdir").symlink_to(real)
+    system = make(runner, kiosk_exit_flag=str(tmp_path / "linkdir" / "exit"))
+    assert system.handle(hs.KIOSK_EXIT) is False
+    assert not (real / "exit").exists()
+    assert runner.calls == []
 
 
 def test_retained_message_is_ignored():

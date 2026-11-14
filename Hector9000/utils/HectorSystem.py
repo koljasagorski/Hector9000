@@ -26,14 +26,31 @@ KIOSK_PROFILE_MARKER = "hector9000-kiosk-profile"
 DEFAULT_COMMANDS = {
     # Needs passwordless sudo for the Hector user (default on Raspberry Pi OS).
     REBOOT: ["sudo", "-n", "systemctl", "reboot"],
-    KIOSK_EXIT: [
-        "sh", "-c",
-        # "[p]" keeps the pattern from matching this sh process itself
-        "touch %s; pkill -f '%s'" % (
-            KIOSK_EXIT_FLAG,
-            KIOSK_PROFILE_MARKER.replace("profile", "[p]rofile")),
-    ],
+    # The exit flag is written by write_kiosk_exit_flag() before this runs.
+    KIOSK_EXIT: ["pkill", "-f", KIOSK_PROFILE_MARKER],
 }
+
+
+def write_kiosk_exit_flag(path=KIOSK_EXIT_FLAG):
+    """Create the kiosk exit flag without following symlinks.
+
+    The directory belongs to the kiosk user and the backend may run as root,
+    so neither the directory nor the flag may be a symlink (otherwise a
+    local user could make root create files elsewhere). Returns False if
+    the directory does not exist (kiosk.sh not running).
+    """
+    parent, name = os.path.split(path)
+    try:
+        dfd = os.open(parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    except FileNotFoundError:
+        return False
+    try:
+        fd = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW, 0o644,
+                     dir_fd=dfd)
+        os.close(fd)
+    finally:
+        os.close(dfd)
+    return True
 
 
 def _default_runner(argv, grace=2.0):
@@ -64,12 +81,14 @@ def _default_runner(argv, grace=2.0):
 
 class HectorSystem:
 
-    def __init__(self, commands=None, runner=None, log=print):
+    def __init__(self, commands=None, runner=None, log=print,
+                 kiosk_exit_flag=KIOSK_EXIT_FLAG):
         self.commands = dict(DEFAULT_COMMANDS)
         if commands:
             self.commands.update(commands)
         self.runner = runner or _default_runner
         self.log = log
+        self.kiosk_exit_flag = kiosk_exit_flag
 
     def handle(self, action, retained=False):
         """Run the command for ``action``. Returns True if it was started."""
@@ -81,6 +100,8 @@ class HectorSystem:
             self.log("System: no command configured for '%s'" % action)
             return False
         try:
+            if action == KIOSK_EXIT and not write_kiosk_exit_flag(self.kiosk_exit_flag):
+                self.log("System: %s missing, kiosk.sh not running?" % self.kiosk_exit_flag)
             self.log("System: running '%s'" % action)
             self.runner(list(argv))
             return True
