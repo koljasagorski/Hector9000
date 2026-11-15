@@ -1,0 +1,60 @@
+[Unit]
+Description=Hector9000 statistics and admin dashboard (HTTP port 8080)
+Documentation=file:///opt/hector9000/backend/deploy/README.md
+After=mosquitto.service
+Wants=mosquitto.service
+RequiresMountsFor=/var/lib/hector9000
+PartOf=hector.target
+
+[Service]
+Type=simple
+# The only service that listens on the network, so it gets its own account without groups
+# and without sudo (provision.sh creates it). Setting the clock and the other machine actions
+# go through MQTT to the controller.
+User=hector-stats
+Group=hector-stats
+# vcgencmd (undervoltage / throttling) needs the GPU mailbox, which belongs to this group
+SupplementaryGroups=video
+WorkingDirectory=/opt/hector9000/backend
+Environment=PYTHONPATH=/opt/hector9000/backend
+Environment=PYTHONUNBUFFERED=1
+Environment=HECTOR_STATE_DIR=/var/lib/hector9000/stats
+# the hardware database is only read (bottle names)
+Environment=HECTOR_DB=/var/lib/hector9000/hector/h9k.db
+# values in hector.env (admin password, Matrix) override the lines above
+EnvironmentFile=-/etc/hector9000/hector.env
+ExecStart=/opt/hector9000/venv/bin/python Hector9000/StatsServer.py
+Restart=on-failure
+RestartSec=5
+# a flood of connections from the Wi-Fi must not take the machine down with it
+# (32 simultaneous requests = 32 handler threads + 32 deadline timers, plus a few service threads)
+MemoryMax=200M
+TasksMax=160
+LimitNOFILE=256
+OOMScoreAdjust=500
+# sandbox: read-only system, one writable folder, no privileges to gain, network sockets only
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/var/lib/hector9000/stats
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=no
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+UMask=0077
+
+[Install]
+WantedBy=hector.target

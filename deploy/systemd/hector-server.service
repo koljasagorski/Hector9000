@@ -1,0 +1,32 @@
+[Unit]
+Description=Hector9000 hardware server (MQTT -> valves, pump, scale, arm)
+Documentation=file:///opt/hector9000/backend/deploy/README.md
+After=mosquitto.service
+Wants=mosquitto.service
+# the data partition must be mounted: otherwise the database would end up on the (possibly
+# read-only or volatile) root file system
+RequiresMountsFor=/var/lib/hector9000
+PartOf=hector.target
+
+[Service]
+Type=simple
+User=hector
+Group=hector
+# h9k.db is opened relative to the working directory (conf/database.py), so the databases
+# end up on the data partition. /var/lib/hector9000 itself belongs to root (provision.sh):
+# the service users own only their own subfolder (hector/, stats/) and cannot replace them.
+WorkingDirectory=/var/lib/hector9000/hector
+Environment=PYTHONPATH=/opt/hector9000/backend
+Environment=PYTHONUNBUFFERED=1
+# no hector.env: it holds the admin password and the Matrix token, only hector-stats.service needs them
+ExecStart=/opt/hector9000/venv/bin/python /opt/hector9000/backend/Hector9000/HectorServer.py
+Restart=on-failure
+RestartSec=3
+# the dosing loop is time critical, keep it responsive
+Nice=-5
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=full
+
+[Install]
+WantedBy=hector.target

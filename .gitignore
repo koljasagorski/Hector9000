@@ -102,3 +102,8 @@ src/Hector9000/log
 *.py-1
 
 /dist
+# secrets of the stats server / deployment (never commit)
+admin_password
+notify.json
+hector.env
+/stats.db*

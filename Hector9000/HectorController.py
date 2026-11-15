@@ -3,6 +3,9 @@ from Hector9000.conf import mqttTopics
 import json
 from Hector9000.conf import drinks as drinks
 from Hector9000.conf import database as db
+from Hector9000.conf import HectorConfig
+from Hector9000.utils import HectorSystem
+from Hector9000.utils import Events
 import webcolors
 import paho.mqtt.client as mqtt
 import time
@@ -45,6 +48,8 @@ class HectorController:
         self.hector = remote.HectorRemote()
         self.LED = True
         self.db = db.Database()
+        self.system = HectorSystem.HectorSystem(
+            commands=HectorConfig.config.get("system"), log=debug)
 
     # todo: When drinks are impl in DB this has to be refactored
     def available_drinks_as_JSON(self):
@@ -92,6 +97,7 @@ class HectorController:
     def on_connect(self, client, userdata, flags, rc):
         debug("Connected with result code " + str(rc))
         self.client.subscribe(self.TopicPrefix + "#")
+        self._publish_event(Events.TOPIC_STATUS + "controller", "online", retain=True)
         if self.LED:
             self.hector.standart(type=3)
 
@@ -134,10 +140,52 @@ class HectorController:
                 msg.topic),
             self._set_servo(msg))
 
+    def _publish_event(self, topic, payload, retain=False):
+        """Events feed the statistics and the notifier; they must never break dosing."""
+        try:
+            self.client.publish(topic, payload, retain=retain)
+        except Exception as e:
+            warning("event not published: " + str(e))
+
+    def report_error(self, source, message, level="error"):
+        error(source + ": " + str(message))
+        self._publish_event(Events.TOPIC_ERROR, Events.error_event(source, message, level))
+
+    def _scaled_amount(self, step):
+        """ml of one recipe step for the configured cup size (recipes are for 400 ml)."""
+        cupsize = int(self.db.get_Setting("cupsize"))
+        return int((int(step[2]) / 400) * cupsize)
+
+    def _plan_dose(self, drink):
+        plan = []
+        for step in drink["recipe"]:
+            if step[0] == "ingr":
+                code = step[1]
+                name, is_alcohol = drinks.ingredients[code][0], drinks.ingredients[code][1]
+                plan.append({"code": code, "name": name, "alcohol": bool(is_alcohol),
+                             "ml": self._scaled_amount(step)})
+        return plan
+
     def _do_dose_drink(self, msg):
-        debug("start dosing drink")
         drinkid = int(msg.payload)
+        started = time.time()
+        failed = []
+        try:
+            self._dose_drink(msg, drinkid, failed)
+        except Exception as e:
+            self._publish_event(Events.TOPIC_DOSE_DONE, Events.dose_finished(
+                drinkid, "failed", time.time() - started, failed))
+            raise   # on_message logs it and publishes the error event
+        status = "ok" if not failed else "partial"
+        self._publish_event(Events.TOPIC_DOSE_DONE, Events.dose_finished(
+            drinkid, status, time.time() - started, failed))
+
+    def _dose_drink(self, msg, drinkid, failed):
+        debug("start dosing drink")
         drink = drinks.available_drinks[drinkid - 1]
+        self._publish_event(Events.TOPIC_DOSE, Events.dose_started(
+            drinkid, drink["name"], drinks.alcoholic(drink),
+            int(self.db.get_Setting("cupsize")), self._plan_dose(drink)))
         # Return ID of drink to identify that drink creation starts
         self.client.publish(self.get_returnTopic(msg.topic), msg.payload)
         progress = 0
@@ -160,10 +208,9 @@ class HectorController:
             if step[0] == "ingr":
                 pump = drinks.available_ingredients.index(step[1])
                 # todo: cash value
-                cupsize = int(self.db.get_Setting("cupsize"))
-                ingamount = int((int(step[2]) / 400) * cupsize)
+                ingamount = self._scaled_amount(step)
                 # Return False to UI ?
-                self.hector.valve_dose(
+                dosed = self.hector.valve_dose(
                     index=int(pump),
                     amount=ingamount,
                     cback=self.dose_callback,
@@ -171,6 +218,13 @@ class HectorController:
                         progress,
                         steps),
                     topic="Hector9000/doseDrink/progress")
+                if dosed is False:
+                    failed.append(step[1])
+                    self.report_error(
+                        "dosing",
+                        "%s: %s (%d ml) wurde nicht dosiert - Flasche leer, "
+                        "Ventil klemmt oder Arm nicht in Position?" % (
+                            drink["name"], drinks.ingredients[step[1]][0], ingamount))
                 self.client.publish(
                     self.get_progressTopic(
                         msg.topic), progress + steps)
@@ -190,6 +244,18 @@ class HectorController:
             pass
         self.client.loop_write()
 
+    def _do_system_action(self, msg, action):
+        ok = self.system.handle(action, retained=bool(getattr(msg, "retain", False)))
+        self.client.publish(self.get_returnTopic(msg.topic), "ok" if ok else "error")
+
+    def _do_set_time(self, msg):
+        retained = bool(getattr(msg, "retain", False))
+        ok = self.system.set_time(msg.payload, retained=retained)
+        self.client.publish(self.get_returnTopic(msg.topic), "ok" if ok else "error")
+        if not ok and not retained:
+            self._publish_event(Events.TOPIC_ERROR, Events.error_event(
+                "system", "Uhr stellen fehlgeschlagen", level="warning"))
+
     def dose_callback(self, progress):
         self.client.publish(self.TopicPrefix + "doseDrink/progress", progress)
 
@@ -198,8 +264,9 @@ class HectorController:
               ", msg: " + str(msg.payload))
         try:
             currentTopic = msg.topic
-            if "/Hardware/" in currentTopic:
-                return  # ignore own Hardware calls
+            if ("/Hardware/" in currentTopic or "/LEDStrip/" in currentTopic
+                    or "/event/" in currentTopic or "/status/" in currentTopic):
+                return  # ignore own Hardware calls, LED messages and events
             elif currentTopic.endswith("/progress"):
                 return  # ignore our own progress messages
             elif currentTopic.endswith("/return"):
@@ -245,6 +312,12 @@ class HectorController:
             elif currentTopic == self.TopicPrefix + mqttTopics.APITopics.closeAllValves:
                 self.hector.all_valve_close()
                 pass
+            elif currentTopic == self.TopicPrefix + mqttTopics.APITopics.reboot:
+                self._do_system_action(msg, HectorSystem.REBOOT)
+            elif currentTopic == self.TopicPrefix + mqttTopics.APITopics.kioskExit:
+                self._do_system_action(msg, HectorSystem.KIOSK_EXIT)
+            elif currentTopic == self.TopicPrefix + mqttTopics.APITopics.setTime:
+                self._do_set_time(msg)
             else:
                 warning("unknown topic: " + currentTopic +
                         ", msg " + str(msg.payload))
@@ -255,12 +328,15 @@ class HectorController:
 
         except Exception as e:
             error(str(e) + "\n" + traceback.format_exc())
+            self._publish_event(Events.TOPIC_ERROR, Events.error_event(
+                "controller", "%s: %s" % (msg.topic.split("Hector9000/")[-1], e)))
 
     def connect(self):
         debug("starting")
         self.client.on_connect = self.on_connect
         self.client.on_message = self.on_message
         self.client.on_log = self.on_log
+        self.client.will_set(Events.TOPIC_STATUS + "controller", "offline", retain=True)
         self.client.connect(self.MQTTServer, 1883, 60)
         debug("started")
         while True:

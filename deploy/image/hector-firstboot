@@ -1,0 +1,120 @@
+#!/usr/bin/env bash
+#
+# First boot of a Hector9000 disk image (hector-firstboot.service, installed to /usr/local/sbin).
+#
+#   1. The data partition (label HECTORDATA, mounted by PARTUUID) grows to the end of the card. The image is only ~4 GB
+#      (system + a small data partition) so that it fits on any card; the card's real size
+#      is used here, once. The system partition keeps its fixed size on purpose.
+#   2. The data folders exist with the right owners.
+#   3. If the Raspberry Pi Imager left a custom.toml (user name, Wi-Fi, SSH ...) on the boot
+#      partition, it is applied. (The stock image does that with init=.../firstboot, which this
+#      image has to leave out because it would also try to grow the system partition.)
+#
+# Safe to run again: every step checks first, the flag file is only written when all went well.
+#
+set -u
+
+MNT="/var/lib/hector9000"
+FLAG="/etc/hector9000/firstboot.done"
+BOOT="/boot/firmware"
+[ -d "$BOOT" ] || BOOT="/boot"
+failed=0
+
+log() { echo "[hector-firstboot] $*"; }
+
+grow_data_partition() {
+    local dev name pk disk num start size dsize end p root_id data_id
+    # The partition that fstab mounted (by PARTUUID) - never "whatever carries the label".
+    if ! dev="$(findmnt -no SOURCE "$MNT" 2>/dev/null)" || [ -z "$dev" ]; then
+        log "$MNT is not mounted - nothing to grow"
+        return 0
+    fi
+    dev="$(readlink -f "$dev")"
+    name="${dev##*/}"
+    # it must be on the same disk as the system partition (same MBR disk id in the PARTUUID)
+    root_id="$(sed -n 's/.*[ ]root=PARTUUID=\([0-9a-fA-F]*\)-[0-9]*.*/\1/p' /proc/cmdline)"
+    data_id="$(blkid -s PARTUUID -o value "$dev" 2>/dev/null | sed 's/-[0-9]*$//')"
+    if [ -z "$root_id" ] || [ "$root_id" != "$data_id" ]; then
+        log "WARNING: $dev is not on the same disk as the system partition (or root= is not a PARTUUID) - not touching the partition table"
+        return 0
+    fi
+    if [ ! -e "/sys/class/block/$name/partition" ]; then
+        log "$dev is not a partition - nothing to grow"
+        return 0
+    fi
+    pk="$(basename "$(readlink -f "/sys/class/block/$name/..")")"
+    disk="/dev/$pk"
+    num="$(cat "/sys/class/block/$name/partition")"
+    start="$(cat "/sys/class/block/$name/start")"
+    size="$(cat "/sys/class/block/$name/size")"
+    dsize="$(cat "/sys/class/block/$pk/size")"
+    end=$((start + size))
+    # only if ours is the LAST partition: never move or overwrite anything behind it
+    for p in /sys/class/block/"$pk"/*/start; do
+        [ -e "$p" ] || continue
+        if [ "$(cat "$p")" -gt "$start" ]; then
+            log "another partition lies behind $dev - not touching the partition table"
+            return 0
+        fi
+    done
+    if [ $((dsize - end)) -lt 2048 ]; then
+        log "$dev already fills the card"
+        return 0
+    fi
+    log "growing $dev from $((size / 2048)) MiB to the end of $disk ($((dsize / 2048)) MiB card)"
+    # ", +": keep the start, use all free space. --no-reread because the disk is in use.
+    if ! echo ", +" | sfdisk --no-reread -N "$num" "$disk" >/dev/null 2>&1; then
+        log "ERROR: sfdisk could not extend partition $num"
+        return 1
+    fi
+    partx -u "$disk" 2>/dev/null || partx -u --nr "$num" "$disk" 2>/dev/null || true
+    udevadm settle 2>/dev/null || true
+    if ! resize2fs "$dev" >/dev/null 2>&1; then
+        log "ERROR: resize2fs failed for $dev"
+        return 1
+    fi
+    log "$dev is now $(( $(cat "/sys/class/block/$name/size") / 2048 )) MiB"
+}
+
+ensure_dirs() {
+    if ! mountpoint -q "$MNT"; then
+        log "ERROR: $MNT is not mounted - the data folders were not checked"
+        return 1
+    fi
+    # /var/lib/hector9000 belongs to root: neither service user can swap its folder for a link
+    install -d -m 0755 -o root -g root "$MNT" || return 1
+    install -d -m 0751 -o hector -g hector "$MNT/hector" || return 1
+    install -d -m 0750 -o hector-stats -g hector-stats "$MNT/stats" || return 1
+}
+
+apply_custom_toml() {
+    local f="$BOOT/custom.toml"
+    [ -f "$f" ] || return 0
+    log "applying $f (Raspberry Pi Imager customisation)"
+    if [ -x /usr/lib/raspberrypi-sys-mods/init_config ] && python3 -c 'import toml' 2>/dev/null; then
+        /usr/lib/raspberrypi-sys-mods/init_config "$f" || log "WARNING: init_config reported errors"
+    else
+        log "WARNING: init_config or python3-toml missing - customisation not applied"
+    fi
+    rm -f "$f"          # it may hold a password hash
+    # init_config -> userconf -> cancel-rename enables AND starts getty@tty1 when it renames the user.
+    # tty1 belongs to the kiosk (Conflicts=getty@tty1): undo that, and start the kiosk, which a
+    # pending getty start job would otherwise replace in this very boot.
+    if [ -d /run/systemd/system ]; then
+        systemctl disable getty@tty1.service >/dev/null 2>&1 || true
+        systemctl --no-block start hector-kiosk.service >/dev/null 2>&1 || true
+    fi
+}
+
+grow_data_partition || failed=1
+ensure_dirs || failed=1
+apply_custom_toml
+
+if [ "$failed" -eq 0 ]; then
+    install -d -m 0755 "$(dirname "$FLAG")"
+    date -u +%Y-%m-%dT%H:%M:%SZ > "$FLAG"
+    log "done"
+else
+    log "something failed - will try again at the next boot"
+fi
+exit 0

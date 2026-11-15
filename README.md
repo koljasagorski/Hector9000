@@ -114,6 +114,68 @@ and uncomment:
 
 
 
+LED strip animations
+---
+
+`Hector9000/LEDStripServer.py` (started by `start.sh` with sudo, log in `LEDStrip.out`)
+renders animations for the WS2812 strip; the logic lives hardware-free in
+`Hector9000/utils/LEDAnimations.py`.
+
+- **Ambient mode** (WebUI settings "LED: …"): `theme` (slow wave in the colours of
+  the selected WebUI theme), `random` (random effect and congress palette every
+  20-40 s), `idle` (dim breathing), `off`.
+- **Auto idle:** after `idle_minutes` without a touch on the WebUI the strip dims; a touch wakes it.
+- **Events** (override the ambient mode): drink selected (pulse), dosing (column fills
+  bottom-up in the drink colour with the real progress, base pulses), drink finished
+  (sparkle), clean/dry (water wave), open/close all valves (chase), reboot (fade out).
+
+Configuration in `HectorConfig.py` under `"ws2812"`: `count`, `base` (LEDs under the
+glass), `column_reversed`, `brightness`, `idle_minutes`, `output`.
+Without hardware: `python3 Hector9000/LEDStripServer.py --console` shows the strip in the terminal.
+
+MQTT topics (`Hector9000/LEDStrip/…`): `theme` (retained, theme id or
+`{"id":…,"colors":["#hex",…]}`), `ambient` (retained), `activity`, `select`, `deselect`,
+plus the existing `dosedrink`, `drinkfinish`, `standart`, `standby`. The server also listens
+to `Hector9000/doseDrink/progress`, `cleanMe`, `dryMe`, `openAllValves`, `closeAllValves`,
+`system/reboot`. A WLED (ESP32) output is planned as an alternative to the GPIO strip.
+
+
+System actions from the WebUI (reboot / leave fullscreen)
+---
+
+The WebUI settings can reboot the Raspberry Pi and leave the kiosk fullscreen.
+Both are handled by `HectorController.py` via MQTT:
+
+| Topic | Action (default command) |
+|---|---|
+| `Hector9000/system/reboot` | `sudo -n systemctl reboot` (needs passwordless sudo, default on Raspberry Pi OS) |
+| `Hector9000/system/kioskExit` | writes `/tmp/hector9000-kiosk/exit` (no symlinks followed), then `pkill -f hector9000-kiosk-profile` |
+
+The result is published on `<topic>/return` (`ok` / `error`). The payload is
+never used, and retained messages are ignored. The commands can be overridden or
+disabled (`[]`) in `Hector9000/conf/HectorConfig.py` under `"system"`.
+The kiosk-exit contract (flag file and profile marker) matches `kiosk.sh` in
+[Hector9000WebUI](https://github.com/koljasagorski/Hector9000WebUI).
+
+Note: the broker allows anonymous access, so anyone who can reach it on the
+network can trigger these actions (as they already can trigger dosing).
+
+
+Statistics page, admin dashboard, chat alerts (fork additions)
+---
+
+`Hector9000/StatsServer.py` records every dose and error from MQTT into SQLite and serves
+
+* a **public statistics page** on `http://<hector>:8080/` (counters, records, charts, live view; read only, no error texts),
+* a **password-protected admin dashboard** on `/admin` (health, bottles, errors, CSV export, safe maintenance actions
+  such as clean, dry, refill, reboot; dangerous ones are refused while a drink is being poured).
+
+A watchdog reports problems (service offline, errors, low bottles) through a notifier; the first backend is a
+**Matrix chat bot** (optional, off by default; set up in the dashboard's "Chat" tab, no restart needed). Details: [`docs/stats.md`](docs/stats.md), [`docs/matrix.md`](docs/matrix.md).
+The cocktail **"Doom"** in the WebUI starts Doom (WebAssembly, free Freedoom levels); see the
+[WebUI repository](https://github.com/koljasagorski/Hector9000WebUI). A lean Raspberry Pi OS Lite setup with systemd units
+lives in [`deploy/`](deploy/README.md). Current state, update procedure and open points: [`docs/HANDOVER.md`](docs/HANDOVER.md).
+
 ## Info 
 
 If you have some ideas or a fix or something else to make 

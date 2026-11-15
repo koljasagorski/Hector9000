@@ -1,0 +1,328 @@
+import io
+import json
+import urllib.error
+
+import pytest
+
+from Hector9000.utils import Notifier as N
+
+
+class Clock:
+    def __init__(self, t=1000.0):
+        self.t = t
+
+    def __call__(self):
+        return self.t
+
+
+class Backend:
+    name = "fake"
+
+    def __init__(self, errors=()):
+        self.sent = []
+        self.errors = list(errors)
+
+    def send(self, text, level, txn):
+        if self.errors:
+            raise self.errors.pop(0)
+        self.sent.append((text, level, txn))
+
+
+def make(backend=None, **kw):
+    clock = Clock()
+    n = N.Notifier([backend or Backend()], clock=clock, **kw)
+    return n, clock
+
+
+def test_below_min_level_and_without_backend_nothing_is_queued():
+    n, _ = make()
+    assert n.notify("info", "hi") is False
+    assert N.Notifier([], clock=Clock()).notify("critical", "x") is False
+
+
+def test_alert_is_sent_with_icon_and_source():
+    b = Backend()
+    n, clock = make(b)
+    assert n.notify("error", "Flasche leer", source="dosing")
+    assert n.process(clock.t) == 1
+    assert b.sent[0][0] == "🔴 Hector9000 (dosing): Flasche leer"
+
+
+def test_identical_alerts_are_deduplicated_within_the_window():
+    b = Backend()
+    n, clock = make(b, dedup_s=600)
+    assert n.notify("error", "x", key="k")
+    assert not n.notify("error", "x", key="k")
+    clock.t += 601
+    assert n.notify("error", "x", key="k")
+    n.process(clock.t)
+    assert len(b.sent) == 2
+
+
+def test_resolve_only_after_a_sent_alert():
+    b = Backend()
+    n, clock = make(b)
+    assert not n.resolve("temp", "wieder ok")
+    n.notify("warning", "heiß", key="temp")
+    assert n.resolve("temp", "wieder ok")
+    n.process(clock.t)
+    assert [s[0][:1] for s in b.sent] == ["🟠", "✅"]
+    assert not n.resolve("temp", "wieder ok")
+
+
+def test_temporary_error_retries_with_backoff_then_succeeds():
+    b = Backend(errors=[N.TemporaryError("offline"), N.TemporaryError("offline")])
+    n, clock = make(b)
+    n.notify("error", "x")
+    n.process(clock.t)
+    assert b.sent == [] and n.status()["queued"] == 1 and "offline" in n.status()["last_error"]
+    n.process(clock.t + 1)                     # not due yet
+    assert b.sent == []
+    n.process(clock.t + 12)
+    n.process(clock.t + 12 + 25)
+    assert len(b.sent) == 1 and n.status()["queued"] == 0 and n.status()["sent"] == 1
+
+
+def test_retry_after_from_server_is_respected():
+    b = Backend(errors=[N.TemporaryError("limit", retry_after=90)])
+    n, clock = make(b)
+    n.notify("error", "x")
+    n.process(clock.t)
+    n.process(clock.t + 60)
+    assert b.sent == []
+    n.process(clock.t + 91)
+    assert len(b.sent) == 1
+
+
+def test_permanent_error_is_not_retried():
+    b = Backend(errors=[N.PermanentError("HTTP 403")])
+    n, clock = make(b)
+    n.notify("error", "x")
+    n.process(clock.t)
+    n.process(clock.t + 1000)
+    assert b.sent == [] and n.status()["queued"] == 0 and n.status()["failed"] == 1
+
+
+def test_unexpected_backend_exception_does_not_escape():
+    b = Backend(errors=[RuntimeError("boom")])
+    n, clock = make(b)
+    n.notify("error", "x")
+    n.process(clock.t)
+    assert n.status()["failed"] == 1 and "boom" in n.status()["last_error"]
+
+
+def test_queue_is_bounded_and_old_messages_are_dropped():
+    b = Backend(errors=[N.TemporaryError("offline")] * 100)
+    n, clock = make(b, max_queue=3)
+    for i in range(10):
+        n.notify("error", "m%d" % i, key="k%d" % i)
+    assert n.status()["queued"] == 3 and n.status()["dropped"] == 7
+    clock.t += N.MAX_AGE_S + 1
+    n.process(clock.t)
+    assert n.status()["queued"] == 0
+
+
+def test_long_text_is_clipped():
+    b = Backend()
+    n, clock = make(b)
+    n.notify("error", "x" * 10000)
+    n.process(clock.t)
+    assert len(b.sent[0][0]) <= N.MAX_TEXT
+
+
+def test_test_message_ignores_level_and_dedup():
+    b = Backend()
+    n, clock = make(b, min_level="critical")
+    assert n.test_message() and n.test_message()
+    n.process(clock.t)
+    assert len(b.sent) == 2 and "Test" in b.sent[0][0]
+
+
+# -------------------------------------------------------------------- Matrix --
+class FakeResponse(io.BytesIO):
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+
+def matrix(opener, **kw):
+    return N.MatrixBackend("https://matrix.example.org/", "!room:example.org", "secret-token",
+                           opener=opener, **kw)
+
+
+def test_matrix_request_shape():
+    seen = {}
+
+    def opener(req, timeout):
+        seen.update(url=req.full_url, method=req.get_method(), headers=dict(req.header_items()),
+                    body=json.loads(req.data))
+        return FakeResponse(b"{}")
+
+    matrix(opener).send("hallo", "error", "txn 1/2")
+    assert seen["method"] == "PUT"
+    assert seen["url"] == ("https://matrix.example.org/_matrix/client/v3/rooms/"
+                           "%21room%3Aexample.org/send/m.room.message/txn%201%2F2")
+    assert seen["headers"]["Authorization"] == "Bearer secret-token"
+    assert seen["body"] == {"msgtype": "m.text", "body": "hallo"}
+
+
+def http_error(code, body=b"{}"):
+    return urllib.error.HTTPError("u", code, "x", {}, io.BytesIO(body))
+
+
+@pytest.mark.parametrize("code,kind", [(401, N.PermanentError), (403, N.PermanentError),
+                                       (404, N.PermanentError), (500, N.TemporaryError),
+                                       (502, N.TemporaryError), (429, N.TemporaryError)])
+def test_matrix_http_errors_map_to_retry_or_give_up(code, kind):
+    def opener(req, timeout):
+        raise http_error(code)
+    with pytest.raises(kind):
+        matrix(opener).send("x", "error", "t")
+
+
+def test_matrix_429_carries_retry_after():
+    def opener(req, timeout):
+        raise http_error(429, b'{"retry_after_ms": 2500}')
+    with pytest.raises(N.TemporaryError) as e:
+        matrix(opener).send("x", "error", "t")
+    assert e.value.retry_after == 2.5
+
+
+def test_matrix_offline_is_temporary():
+    def opener(req, timeout):
+        raise urllib.error.URLError("Name or service not known")
+    with pytest.raises(N.TemporaryError):
+        matrix(opener).send("x", "error", "t")
+
+
+def test_matrix_requires_https_unless_allowed():
+    with pytest.raises(ValueError):
+        N.MatrixBackend("http://matrix.lan", "!r:x", "t")
+    assert N.MatrixBackend("http://matrix.lan", "!r:x", "t", allow_http=True).homeserver == "http://matrix.lan"
+    with pytest.raises(ValueError):
+        N.MatrixBackend("https://m.example", "", "t")
+
+
+def test_backends_from_env_needs_homeserver_and_token():
+    assert N.backends_from_env({}) == []
+    assert N.backends_from_env({"HECTOR_MATRIX_HOMESERVER": "https://m.example"}) == []
+    got = N.backends_from_env({"HECTOR_MATRIX_HOMESERVER": "https://m.example",
+                               "HECTOR_MATRIX_TOKEN": "t", "HECTOR_MATRIX_ROOM": "!r:m.example"})
+    assert [b.name for b in got] == ["matrix"]
+
+
+def test_status_never_contains_the_token():
+    n = N.Notifier(N.backends_from_env({"HECTOR_MATRIX_HOMESERVER": "https://m.example",
+                                        "HECTOR_MATRIX_TOKEN": "geheim", "HECTOR_MATRIX_ROOM": "!r:m"}))
+    assert "geheim" not in json.dumps(n.status())
+
+
+def test_untrusted_alerts_are_capped_per_hour_with_one_summary():
+    n, clock = make(max_untrusted_per_hour=5)
+    sent = [n.notify("error", "spam %d" % i, source="x", untrusted=True) for i in range(20)]
+    assert sent[:5] == [True] * 5 and not any(sent[5:])
+    texts = [i["text"] for i in n.queue]
+    assert len(texts) == 6 and "unterdrückt" in texts[-1]          # five alerts + one summary
+    assert n.stats["suppressed"] == 15
+    # internal checks (watchdog, temperature, ...) are not affected by the flood
+    assert n.notify("critical", "CPU heiß", key="temp", source="watchdog") is True
+    # and the cap opens again after an hour, with a recap of what was held back
+    clock.t += 3601
+    assert n.notify("error", "again", source="x", untrusted=True) is True
+    recap = [i["text"] for i in n.queue if "wurden unterdrückt" in i["text"]]
+    assert len(recap) == 1 and "15" in recap[0] and "x 15×" in recap[0]
+
+
+def test_untrusted_text_is_clipped_harder():
+    n, _ = make()
+    n.notify("error", "A" * 5000, source="x", untrusted=True)
+    assert len(n.queue[0]["text"]) < 500
+
+
+# ------------------------------------------------- runtime changes (dashboard) --
+def test_reconfigure_swaps_backend_and_level_and_drops_orphaned_messages():
+    old, new = Backend(), Backend()
+    old.name, new.name = "old", "new"
+    n, clock = make(old)
+    n.notify("error", "for the old one", key="a")
+    n.reconfigure([new], "critical")
+    assert n.queue == [] and n.stats["dropped"] == 1            # nobody left to deliver it
+    assert n.notify("error", "too low now", key="b") is False   # level went up
+    assert n.notify("critical", "now", key="c") is True
+    n.process(clock.t)
+    assert [t for t, _, _ in new.sent] == ["🚨 Hector9000: now"] and old.sent == []
+
+
+def test_reconfigure_keeps_messages_for_a_backend_that_stays():
+    b = Backend()
+    n, clock = make(b)
+    n.notify("error", "kept", key="a")
+    n.reconfigure([b], "warning")
+    assert n.process(clock.t) == 1 and len(b.sent) == 1
+
+
+def test_reconfigure_clears_the_stale_error_and_can_switch_everything_off():
+    b = Backend([N.PermanentError("Token falsch")])
+    n, clock = make(b)
+    n.notify("error", "x", key="a")
+    n.process(clock.t)
+    assert n.status()["last_error"] == "Token falsch"
+    n.reconfigure([], "warning")
+    assert n.status()["last_error"] is None and not n.enabled
+    assert n.notify("critical", "nobody listens") is False
+
+
+def test_reconfigure_starts_the_worker_only_if_start_was_called():
+    n = N.Notifier([], clock=Clock())
+    n.reconfigure([Backend()], "warning")
+    assert n._thread is None                                    # start() never called: tests, demo mode
+    n.reconfigure([], "warning")
+    n.start()                                                   # nothing configured yet: no thread
+    assert n._thread is None
+    n.reconfigure([Backend()], "warning")                       # configured later in the dashboard
+    assert n._thread is not None and n._thread.is_alive()
+
+
+def test_worker_survives_a_backend_removed_while_it_was_sending():
+    class Slow(Backend):
+        def send(self, text, level, txn):
+            n.reconfigure([], "warning")                        # the admin switches Matrix off mid-send
+            super().send(text, level, txn)
+    b = Slow()
+    n, clock = make(b)
+    n.notify("error", "x", key="a")
+    n.process(clock.t)                                          # must not raise
+    assert n.queue == []
+
+
+def test_matrix_join_posts_to_the_join_endpoint():
+    seen = {}
+
+    def opener(req, timeout):
+        seen.update(url=req.full_url, method=req.get_method(), body=json.loads(req.data),
+                    auth=req.get_header("Authorization"))
+        return FakeResponse(b"{}")
+
+    matrix(opener).join()
+    assert seen["method"] == "POST"
+    assert seen["url"] == "https://matrix.example.org/_matrix/client/v3/join/%21room%3Aexample.org"
+    assert seen["auth"] == "Bearer secret-token" and seen["body"] == {}
+
+
+def test_matrix_join_403_explains_the_invitation():
+    def opener(req, timeout):
+        raise http_error(403)
+    with pytest.raises(N.PermanentError) as e:
+        matrix(opener).join()
+    assert "eingeladen" in str(e.value)
+
+
+def test_default_opener_never_follows_redirects():
+    """The Authorization header must not be sent on to whatever host a redirect names."""
+    handler = N._NoRedirect()
+    req = N.urllib.request.Request("https://matrix.example.org/x", headers={"Authorization": "Bearer t"})
+    for code in (301, 302, 303, 307, 308):
+        assert handler.redirect_request(req, None, code, "moved", {}, "https://evil.example/") is None
+    assert matrix(None)._open is N._open_no_redirect

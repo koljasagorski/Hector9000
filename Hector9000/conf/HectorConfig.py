@@ -1,3 +1,6 @@
+import json
+import os
+
 # hardware configuration
 # all pin numbers are corresponding to physical P1 connector!
 
@@ -49,10 +52,59 @@ config = {
     },
     "ws2812": {
         # D18
-        "DIN": 12
+        "DIN": 12,
+        "output": "ws2812",       # "ws2812" (strip on the Pi) or "console" (test)
+        "count": 15,              # LEDs in total
+        "base": 5,                # first LEDs: under the glass
+        "column_reversed": False,  # True if the column's first LED is at the top
+        "brightness": 0.5,        # 0..1, caps power draw and glare
+        "idle_minutes": 5         # dim idle animation after no touch (0 = never)
     },
     "mqtt": {
         "SERVER": "localhost",
         "TOPICPREFIX": "Hector9000/Main/"
+    },
+    "system": {
+        # Commands triggered from the WebUI settings (argv lists, no shell
+        # expansion of MQTT payloads). Leave out a key to keep the default
+        # from Hector9000/utils/HectorSystem.py, set it to [] to disable it.
+        # "reboot": ["sudo", "-n", "systemctl", "reboot"],
+        # "kiosk_exit": ["pkill", "-f", "hector9000-kiosk-profile"],
+        #   (the exit flag /tmp/hector9000-kiosk/exit is always written first)
     }
 }
+
+
+def merge_config(base, extra):
+    """Recursively copy the values of `extra` into `base` (dicts are merged, the rest replaced)."""
+    for key, value in extra.items():
+        if isinstance(value, dict) and isinstance(base.get(key), dict):
+            merge_config(base[key], value)
+        else:
+            base[key] = value
+    return base
+
+
+def load_override(path, target=None):
+    """Apply a JSON file on top of `config`, so that a machine's calibration and
+    valve positions live outside the git-tracked file (no update conflicts).
+
+    Missing file: nothing happens. A broken file is reported and ignored - the
+    machine must still start with the defaults above.
+    """
+    target = config if target is None else target
+    try:
+        with open(path) as f:
+            data = json.load(f)
+        if not isinstance(data, dict):
+            raise ValueError("top level must be an object")
+    except FileNotFoundError:
+        return target
+    except (OSError, ValueError, RecursionError) as e:
+        print("HectorConfig WARNING: ignoring %s: %s" % (path, e))
+        return target
+    return merge_config(target, data)
+
+
+# /etc/hector9000/config.json (or $HECTOR_CONFIG), e.g. {"hx711": {"ref": 2200}}
+load_override(os.environ.get("HECTOR_CONFIG", "/etc/hector9000/config.json"))

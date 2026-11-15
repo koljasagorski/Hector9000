@@ -1,0 +1,41 @@
+# Hector9000: what the "hector" service user may do as root (and nothing more).
+# Installed to /etc/sudoers.d/hector9000 (mode 0440) after "visudo -cf".
+#
+# Deliberately no wildcards: in sudoers a "*" also matches spaces, so
+# "restart hector-*" would allow "restart hector-x ssh.service".
+Cmnd_Alias HECTOR_CTL = \
+    /usr/bin/systemctl reboot, \
+    /usr/bin/systemctl stop hector-kiosk, \
+    /usr/bin/systemctl start hector-kiosk, \
+    /usr/bin/systemctl restart hector-server, \
+    /usr/bin/systemctl restart hector-controller, \
+    /usr/bin/systemctl restart hector-led, \
+    /usr/bin/systemctl restart hector-stats, \
+    /usr/bin/systemctl restart hector-kiosk
+
+# Admin dashboard "set clock": the statistics service (which has no sudo) publishes the
+# time on MQTT and the controller (this user) runs `date` - exactly ten digits of epoch
+# seconds, 1.7e9 .. 1.99e9 (Nov 2023 .. May 2033), nothing else can be appended. Needed
+# because the Pi has no battery clock and starts with the time of the last shutdown when
+# offline. Keep in sync with SET_TIME_MIN/MAX in utils/HectorSystem.py (a test checks this);
+# in 2033 this range has to be moved on.
+Cmnd_Alias HECTOR_CLOCK = \
+    /usr/bin/date -u -s @1[7-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]
+
+# Maintenance menu on the machine's own console: show the admin password that the
+# statistics service generated on its first start. It is read AS hector-stats (not as
+# root): the directory above the file belongs to "hector", so that user could replace
+# "stats" by a link - as hector-stats such a link leads nowhere but to files that the
+# statistics service may read anyway. Fixed file, no argument that can change.
+Cmnd_Alias HECTOR_SHOWPW = \
+    /usr/bin/cat /var/lib/hector9000/stats/admin_password
+
+# Maintenance menu: switch the read-only root (overlay) on/off. The script only edits
+# cmdline.txt on the boot partition (and installs the package "overlayroot" if it is missing).
+Cmnd_Alias HECTOR_OVERLAY = \
+    /usr/local/sbin/hector-overlay status, \
+    /usr/local/sbin/hector-overlay on, \
+    /usr/local/sbin/hector-overlay off
+
+hector ALL=(root) NOPASSWD: HECTOR_CTL, HECTOR_CLOCK, HECTOR_OVERLAY
+hector ALL=(hector-stats) NOPASSWD: HECTOR_SHOWPW

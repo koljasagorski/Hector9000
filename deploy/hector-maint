@@ -1,0 +1,162 @@
+#!/usr/bin/env bash
+#
+# Hector9000 maintenance menu (text console on tty1, shown while the kiosk
+# is stopped). Installed to /usr/local/bin and run by hector-maint.service as
+# the unprivileged "hector" user; privileged steps go through the narrow rules
+# in /etc/sudoers.d/hector9000.
+#
+# Non-interactive helpers (also used by the tests):
+#   hector-maint --ips       print IP addresses
+#   hector-maint --status    print service states
+#   hector-maint --password  print the admin dashboard password
+#   hector-maint --overlay   print the state of the read-only root (overlay)
+#
+set -u
+
+SERVICES=(mosquitto hector-server hector-controller hector-led hector-stats hector-kiosk)
+SUDO="sudo -n"
+
+ips() {
+    echo "Netzwerk:"
+    if command -v ip >/dev/null 2>&1; then
+        ip -br addr 2>/dev/null | grep -v '^lo ' || true
+    else
+        hostname -I 2>/dev/null || echo "  (keine Adresse gefunden)"
+    fi
+    echo
+    echo "Hostname: $(hostname)"
+    echo "Statistikseite: http://$(hostname -I 2>/dev/null | awk '{print $1}'):8080/"
+}
+
+status() {
+    printf '%-20s %s\n' "Dienst" "Zustand"
+    local state
+    for s in "${SERVICES[@]}"; do
+        state="$(systemctl is-active "$s" 2>/dev/null || true)"
+        printf '%-20s %s\n' "$s" "${state:-unbekannt}"
+    done
+    echo
+    echo "Uptime:  $(uptime -p 2>/dev/null || true)"
+    if command -v vcgencmd >/dev/null 2>&1; then
+        echo "CPU:     $(vcgencmd measure_temp 2>/dev/null || true)  $(vcgencmd get_throttled 2>/dev/null || true)"
+    fi
+    echo "Speicher: $(free -m 2>/dev/null | awk '/^Mem:/ {print $3 "/" $2 " MB belegt"}')"
+    echo "Platte:   $(df -h / 2>/dev/null | awk 'NR==2 {print $3 "/" $2 " (" $5 ")"}')"
+}
+
+logs() {
+    echo "Welcher Dienst? 1) server 2) controller 3) led 4) stats 5) kiosk 6) mosquitto"
+    read -rsn1 -p "> " choice
+    echo
+    case "$choice" in
+        1) unit=hector-server ;;
+        2) unit=hector-controller ;;
+        3) unit=hector-led ;;
+        4) unit=hector-stats ;;
+        5) unit=hector-kiosk ;;
+        6) unit=mosquitto ;;
+        *) return ;;
+    esac
+    journalctl -u "$unit" -n 40 --no-pager 2>&1 || echo "(journalctl nicht erlaubt)"
+}
+
+password() {
+    echo "Admin-Dashboard: http://$(hostname -I 2>/dev/null | awk '{print $1}'):8080/admin"
+    echo "Benutzer: admin"
+    local pw
+    if pw="$($SUDO -u hector-stats cat /var/lib/hector9000/stats/admin_password 2>/dev/null)" && [ -n "$pw" ]; then
+        echo "Passwort: $pw"
+        echo
+        echo "(Ändern: HECTOR_ADMIN_PASSWORD in /etc/hector9000/hector.env, dann hector-stats neu starten.)"
+    else
+        echo "Passwort: noch keines (der Statistikdienst legt es beim ersten Start an) oder per"
+        echo "HECTOR_ADMIN_PASSWORD in /etc/hector9000/hector.env festgelegt."
+    fi
+}
+
+overlay() {
+    $SUDO /usr/local/sbin/hector-overlay status 2>&1 || echo "(Status nicht lesbar)"
+}
+
+overlay_menu() {
+    overlay
+    echo
+    echo "Mit Schreibschutz übersteht das System ein Ziehen des Steckers. Änderungen am System"
+    echo "(z. B. /etc/hector9000/hector.env, WLAN) gehen dann beim Neustart verloren: vorher"
+    echo "ausschalten, ändern, wieder einschalten. Rezepte und Statistik bleiben immer erhalten."
+    echo
+    read -rsn1 -p "1 = einschalten, 2 = ausschalten, sonst zurück > " c
+    echo
+    case "$c" in
+        1) $SUDO /usr/local/sbin/hector-overlay on ;;
+        2) $SUDO /usr/local/sbin/hector-overlay off ;;
+    esac
+}
+
+pause() {
+    echo
+    read -rsn1 -p "[Taste drücken]" _
+    echo
+}
+
+menu() {
+    while true; do
+        clear
+        echo "=============================================="
+        echo "  HECTOR 9000 - Wartung   (Kiosk ist gestoppt)"
+        echo "=============================================="
+        echo
+        echo "  1) Kiosk (Vollbild) starten"
+        echo "  2) IP-Adressen anzeigen"
+        echo "  3) Dienste-Status"
+        echo "  4) Logs ansehen"
+        echo "  5) Hector-Dienste neu starten"
+        echo "  6) Neustart"
+        echo "  7) Admin-Passwort anzeigen"
+        echo "  8) Schreibschutz (Overlay) an/aus"
+        echo
+        echo "  Konsole mit Login: USB-Tastatur Strg+Alt+F2"
+        echo
+        # timeout: redraw now and then; no input needed to keep the console alive
+        if ! read -rsn1 -t 300 -p "> " key; then
+            continue
+        fi
+        echo
+        case "$key" in
+            1)
+                echo "Starte Kiosk ..."
+                $SUDO systemctl start hector-kiosk || { echo "Fehler beim Start"; pause; }
+                sleep 5   # this menu is stopped by the kiosk (Conflicts=)
+                ;;
+            2) ips; pause ;;
+            3) status; pause ;;
+            4) logs; pause ;;
+            5)
+                for s in hector-server hector-controller hector-led hector-stats; do
+                    echo "restart $s"
+                    $SUDO systemctl restart "$s" || echo "  Fehler"
+                done
+                pause
+                ;;
+            6)
+                read -rsn1 -p "Wirklich neu starten? (j/N) " yn
+                echo
+                if [ "$yn" = "j" ] || [ "$yn" = "J" ]; then
+                    $SUDO systemctl reboot
+                    sleep 30
+                fi
+                ;;
+            7) password; pause ;;
+            8) overlay_menu; pause ;;
+        esac
+    done
+}
+
+case "${1:-}" in
+    --ips) ips ;;
+    --status) status ;;
+    --password) password ;;
+    --overlay) overlay ;;
+    "") menu ;;
+    *) echo "usage: hector-maint [--ips|--status|--password|--overlay]" >&2; exit 2 ;;
+esac
