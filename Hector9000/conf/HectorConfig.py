@@ -1,3 +1,6 @@
+import json
+import os
+
 # hardware configuration
 # all pin numbers are corresponding to physical P1 connector!
 
@@ -70,3 +73,38 @@ config = {
         #   (the exit flag /tmp/hector9000-kiosk/exit is always written first)
     }
 }
+
+
+def merge_config(base, extra):
+    """Recursively copy the values of `extra` into `base` (dicts are merged, the rest replaced)."""
+    for key, value in extra.items():
+        if isinstance(value, dict) and isinstance(base.get(key), dict):
+            merge_config(base[key], value)
+        else:
+            base[key] = value
+    return base
+
+
+def load_override(path, target=None):
+    """Apply a JSON file on top of `config`, so that a machine's calibration and
+    valve positions live outside the git-tracked file (no update conflicts).
+
+    Missing file: nothing happens. A broken file is reported and ignored - the
+    machine must still start with the defaults above.
+    """
+    target = config if target is None else target
+    try:
+        with open(path) as f:
+            data = json.load(f)
+        if not isinstance(data, dict):
+            raise ValueError("top level must be an object")
+    except FileNotFoundError:
+        return target
+    except (OSError, ValueError, RecursionError) as e:
+        print("HectorConfig WARNING: ignoring %s: %s" % (path, e))
+        return target
+    return merge_config(target, data)
+
+
+# /etc/hector9000/config.json (or $HECTOR_CONFIG), e.g. {"hx711": {"ref": 2200}}
+load_override(os.environ.get("HECTOR_CONFIG", "/etc/hector9000/config.json"))
