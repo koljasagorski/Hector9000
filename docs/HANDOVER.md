@@ -116,8 +116,8 @@ Nach dem Boot: `http://<ip>:8080/` (öffentlich) und `http://<ip>:8080/admin` (L
 im WebUI immer da (virtueller Eintrag, falls das Backend keinen liefert). Der Matrix-Bot wird im Dashboard-Reiter „Chat“
 eingerichtet (Speicherort `/var/lib/hector9000/notify.json`, gehört dem Dienstbenutzer, siehe [`matrix.md`](matrix.md)).
 
-Stand des Payloads: neu gebaut am 2026-11-15 mit Backend `0578a8f` (enthält den Reiter „Chat“) und WebUI `14c9cd3`,
-`VERSION` = `backend-0578a8f-webui-14c9cd3`. Der Erledigt-Marker ist versioniert; ein älterer, schon ausgeführter Payload
+Stand des Payloads: neu gebaut am 2026-11-15 mit Backend `96b376d` (Reiter „Chat“, MQTT-Wächter `mqtt-guard.sh`) und WebUI `c830fc5`,
+`VERSION` = `backend-96b376d-webui-c830fc5`. Der Erledigt-Marker ist versioniert; ein älterer, schon ausgeführter Payload
 läuft mit der neuen `VERSION` also noch einmal.
 
 Das **schlanke OS** ist der andere Weg (frisch flashen, `deploy/provision.sh`, oder gleich das fertige Image aus `deploy/image/`). Es ist bisher
