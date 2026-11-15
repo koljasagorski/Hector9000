@@ -103,7 +103,12 @@ Lauf 2 → Lauf 3 geprüft, aber noch nicht auf dem echten Pi ausgeführt. Was L
   (`~/Documents/Hector9000-SD-Lauf3/`, mit `ANLEITUNG.txt`); er ist nicht im Repo, weil er Bundles enthält.
 
 Nach dem Boot: `http://<ip>:8080/` (öffentlich) und `http://<ip>:8080/admin` (Login `admin`). Der Cocktail „Doom“ ist
-im WebUI immer da (virtueller Eintrag, falls das Backend keinen liefert).
+im WebUI immer da (virtueller Eintrag, falls das Backend keinen liefert). Der Matrix-Bot wird im Dashboard-Reiter „Chat“
+eingerichtet (Speicherort `/var/lib/hector9000/notify.json`, gehört dem Dienstbenutzer, siehe [`matrix.md`](matrix.md)).
+
+Stand des Payloads: neu gebaut am 2026-11-15 mit Backend `0578a8f` (enthält den Reiter „Chat“) und WebUI `14c9cd3`,
+`VERSION` = `backend-0578a8f-webui-14c9cd3`. Der Erledigt-Marker ist versioniert; ein älterer, schon ausgeführter Payload
+läuft mit der neuen `VERSION` also noch einmal.
 
 Das **schlanke OS** ist der andere Weg (frisch flashen, `deploy/provision.sh`). Es ist bisher nur im Container
 (`debian:bookworm`, arm64) getestet, nicht auf echter Hardware.
