@@ -236,3 +236,47 @@ def test_abort_running_on_restart(store):
 def test_export_rejects_unknown_tables(store):
     with pytest.raises(ValueError):
         store.export_rows("sqlite_master")
+
+
+def test_error_notifications_are_marked_untrusted_by_the_server_wiring(tmp_path):
+    import argparse
+    from Hector9000 import StatsServer as SS
+    app = SS.build_app(argparse.Namespace(demo=True), env={"HECTOR_STATE_DIR": str(tmp_path)})
+    calls = []
+    app.notifier.notify = lambda *a, **k: calls.append(k)
+    app.recorder.handle(Events.TOPIC_ERROR, Events.error_event("valve", "klemmt"), 100)
+    assert calls and calls[0]["untrusted"] is True
+
+
+def test_learned_drink_names_are_bounded(rec):
+    for batch in range(40):                 # 40 messages of 50 names, a minute apart: 2000 ids
+        drinks = [{"id": batch * 50 + i, "name": "d%d" % i} for i in range(50)]
+        rec.handle("Hector9000/get_drinks/return", json.dumps({"drinks": drinks}), 100 + batch * 70)
+    assert len(rec.drink_names) <= 500
+
+
+def test_get_drinks_flood_is_rate_limited(rec):
+    for i in range(1000):
+        rec.handle("Hector9000/get_drinks/return", json.dumps({"drinks": [{"id": i, "name": "x"}]}), 100)
+    assert len(rec.drink_names) <= 120          # the "event" bucket
+
+
+def test_prune_keeps_the_tables_within_their_caps(store, monkeypatch):
+    import Hector9000.utils.StatsStore as SSt
+    monkeypatch.setattr(SSt, "MAX_DOSES", 50)
+    monkeypatch.setattr(SSt, "MAX_INGREDIENT_ROWS", 80)
+    monkeypatch.setattr(SSt, "MAX_ERRORS", 30)
+    monkeypatch.setattr(SSt, "MAX_EVENTS", 30)
+    for i in range(200):
+        did = store.start_dose(1000 + i, 1, "Drink", 0, 200,
+                               planned=[{"code": "c", "name": "C", "ml": 10, "alcohol": False}])
+        store.finish_dose(did, 1001 + i, "ok")
+        store.add_error(1000 + i, "x", "error", "m%d" % i)
+        store.add_event(1000 + i, "boot", "")
+    store.prune(1500)
+    assert store._one("SELECT COUNT(*) AS n FROM doses")["n"] == 50
+    assert store._one("SELECT COUNT(*) AS n FROM ingredient_use")["n"] <= 80
+    assert store._one("SELECT COUNT(*) AS n FROM errors")["n"] == 30
+    assert store._one("SELECT COUNT(*) AS n FROM events")["n"] == 30
+    newest = store._one("SELECT MAX(ts) AS t FROM doses")["t"]
+    assert newest == 1199                         # the newest rows survive, the oldest go

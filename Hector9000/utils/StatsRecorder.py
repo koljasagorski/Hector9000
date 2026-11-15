@@ -21,6 +21,7 @@ from Hector9000.utils import Events
 STALE_DOSE_S = 150         # a dose without any sign of life this long was aborted
 RATE_WINDOW_S = 60.0
 RATE_LIMITS = {"dose": 40, "error": 60, "event": 120}
+MAX_DRINK_NAMES = 500
 
 ACTION_KINDS = {
     "cleanMe": "clean",
@@ -110,7 +111,8 @@ class StatsRecorder:
         elif t == "doseDrink/progress":
             self._progress(payload, now)
         elif t == "get_drinks/return":
-            self._learn_drinks(payload)
+            if self._allowed("event", now):
+                self._learn_drinks(payload)
 
     # -------------------------------------------------------------- doses --
     def _close_stale(self, now, reason):
@@ -223,7 +225,10 @@ class StatsRecorder:
         try:
             data = json.loads(payload)
             for d in data.get("drinks", [])[:200]:
-                self.drink_names[int(d["id"])] = str(d["name"])[:100]
+                drink_id = int(d["id"])
+                if drink_id not in self.drink_names and len(self.drink_names) >= MAX_DRINK_NAMES:
+                    continue                      # a real menu has a few dozen drinks
+                self.drink_names[drink_id] = str(d["name"])[:100]
         except (ValueError, KeyError, TypeError, AttributeError, RecursionError):
             pass
 

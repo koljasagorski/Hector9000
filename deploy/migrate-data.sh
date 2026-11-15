@@ -81,11 +81,16 @@ cmd_import() {
     ts="$(date +%Y%m%d-%H%M%S)"
 
     if [ -d /run/systemd/system ]; then
-        echo "stopping Hector services (databases must not be open)"
-        systemctl stop hector-controller hector-server hector-stats 2>/dev/null || true
+        echo "stopping Hector services (databases must not be open, nothing may run as $HECTOR_USER)"
+        systemctl stop hector.target hector-kiosk hector-controller hector-server hector-led hector-stats 2>/dev/null || true
     fi
 
     install -d -m 0750 -o "$HECTOR_USER" -g "$HECTOR_USER" "$STATE_DIR"
+    # $STATE_DIR belongs to the service user, but this script writes there as root. A symbolic
+    # link planted by that user would redirect root's writes (backup copies) to any file.
+    if [ -n "$(find "$STATE_DIR" -maxdepth 1 -type l -print -quit)" ]; then
+        die "$STATE_DIR contains symbolic links ($(find "$STATE_DIR" -maxdepth 1 -type l -printf '%f ' | head -c 200)) - remove them and run again"
+    fi
     local f base
     for f in "$tmp"/hector-data/db/*; do
         [ -f "$f" ] || continue
@@ -95,7 +100,8 @@ cmd_import() {
             *) echo "skipping unexpected file in the archive: $base"; continue ;;
         esac
         if [ -f "$STATE_DIR/$base" ]; then
-            cp -p "$STATE_DIR/$base" "$STATE_DIR/$base.bak-$ts"
+            [ ! -e "$STATE_DIR/$base.bak-$ts" ] || die "$STATE_DIR/$base.bak-$ts already exists"
+            cp -p --no-dereference "$STATE_DIR/$base" "$STATE_DIR/$base.bak-$ts"
             echo "saved existing $base as $base.bak-$ts"
         fi
         install -m 0640 -o "$HECTOR_USER" -g "$HECTOR_USER" "$f" "$STATE_DIR/$base"

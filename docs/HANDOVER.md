@@ -111,8 +111,9 @@ Das **schlanke OS** ist der andere Weg (frisch flashen, `deploy/provision.sh`). 
 * **Statistik/Admin:** Basic-Auth mit Benutzer `admin`; Passwort aus Umgebung oder Datei. Gefährliche Aktionen
   (Neustart, Ventile, Uhr stellen …) werden **während einer Dosierung abgelehnt**. Der Alkohol-Wert ist nur eine Schätzung.
   Ein Sicherheitsreview (2026-11-15) hat zu Korrekturen geführt: negatives `Content-Length` (Speicher-DoS ohne Login),
-  Verbindungslimit samt Gesamtfrist pro Anfrage, globales Login-Limit, Uhr-Bereich in der sudoers-Regel, Schutz in
-  `migrate-data.sh` gegen Symlinks im Archiv, kein Secret mehr in der Kiosk-Umgebung. **Offen** (siehe unten):
+  Verbindungslimit samt Gesamtfrist pro Anfrage, globales Login-Limit (nimmt bekannte Geräte aus), Zeilen-Obergrenzen
+  je Tabelle, Obergrenze für Chat-Meldungen aus MQTT, Uhr-Bereich in der sudoers-Regel, Schutz in `migrate-data.sh`
+  gegen Symlinks im Archiv und im Statusverzeichnis, kein Secret mehr in der Kiosk-Umgebung. **Offen** (siehe unten):
   Klartext-HTTP (`HECTOR_ADMIN_REMOTE=0` im Fremdnetz) und die gemeinsame Vertrauensdomäne des Benutzers `hector`.
 * **Benachrichtigungen:** Dedup 3600 s, Warteschlange 50, Backoff, Nachrichten älter als 6 h werden verworfen.
 * **Sprache:** Docs im Backend (`docs/`, `deploy/`) auf Deutsch, READMEs im WebUI und das Top-Level-README auf Englisch.
@@ -121,7 +122,7 @@ Das **schlanke OS** ist der andere Weg (frisch flashen, `deploy/provision.sh`). 
 
 Backend (mit lokalem MQTT-Broker für die älteren Tests; ohne Broker laufen nur die neuen):
 
-    python -m pytest tests -q                       # Stand: 154 bestanden
+    python -m pytest tests -q                       # Stand: 164 bestanden
     python -m pytest tests/test_Stats.py tests/test_StatsServer.py tests/test_Notifier.py \
         tests/test_Watchdog.py tests/test_ControllerEvents.py tests/test_HectorConfig.py   # ohne Broker
 

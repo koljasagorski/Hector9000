@@ -217,3 +217,23 @@ def test_status_never_contains_the_token():
     n = N.Notifier(N.backends_from_env({"HECTOR_MATRIX_HOMESERVER": "https://m.example",
                                         "HECTOR_MATRIX_TOKEN": "geheim", "HECTOR_MATRIX_ROOM": "!r:m"}))
     assert "geheim" not in json.dumps(n.status())
+
+
+def test_untrusted_alerts_are_capped_per_hour_with_one_summary():
+    n, clock = make(max_untrusted_per_hour=5)
+    sent = [n.notify("error", "spam %d" % i, source="x", untrusted=True) for i in range(20)]
+    assert sent[:5] == [True] * 5 and not any(sent[5:])
+    texts = [i["text"] for i in n.queue]
+    assert len(texts) == 6 and "unterdrückt" in texts[-1]          # five alerts + one summary
+    assert n.stats["suppressed"] == 15
+    # internal checks (watchdog, temperature, ...) are not affected by the flood
+    assert n.notify("critical", "CPU heiß", key="temp", source="watchdog") is True
+    # and the cap opens again after an hour
+    clock.t += 3601
+    assert n.notify("error", "again", source="x", untrusted=True) is True
+
+
+def test_untrusted_text_is_clipped_harder():
+    n, _ = make()
+    n.notify("error", "A" * 5000, source="x", untrusted=True)
+    assert len(n.queue[0]["text"]) < 500

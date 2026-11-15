@@ -62,6 +62,13 @@ UNIT_GRAMS = 10.0            # 1 "standard drink" (DE: 10 g pure alcohol)
 SESSION_GAP_S = 2 * 3600     # a pause longer than this starts a new session
 HEALTH_RETENTION_S = 30 * 86400
 ERROR_RETENTION_S = 365 * 86400
+# Hard caps per table (newest rows win). Years of normal use stay far below them; they only
+# bite when somebody floods the (anonymous) MQTT broker, so the SD card and the RAM that
+# public_stats() needs stay bounded.
+MAX_DOSES = 20000
+MAX_INGREDIENT_ROWS = 100000
+MAX_ERRORS = 5000
+MAX_EVENTS = 5000
 
 COUNTED = ("ok", "partial")  # doses that poured something
 
@@ -193,6 +200,15 @@ class StatsStore:
         self._exec("DELETE FROM samples WHERE ts < ?", (now - HEALTH_RETENTION_S,))
         self._exec("DELETE FROM errors WHERE ts < ?", (now - ERROR_RETENTION_S,))
         self._exec("DELETE FROM events WHERE ts < ?", (now - ERROR_RETENTION_S,))
+        self._trim("doses", MAX_DOSES)
+        self._trim("ingredient_use", MAX_INGREDIENT_ROWS)
+        self._trim("errors", MAX_ERRORS)
+        self._trim("events", MAX_EVENTS)
+
+    def _trim(self, table, keep):
+        """Keep only the newest `keep` rows (ids grow with time). Table names are constants."""
+        assert table in ("doses", "ingredient_use", "errors", "events")
+        self._exec("DELETE FROM %s WHERE id <= (SELECT MAX(id) FROM %s) - ?" % (table, table), (int(keep),))
 
     def abort_running(self, ts, older_than=None):
         """Mark dosings that never ended (power loss, crash) as aborted."""

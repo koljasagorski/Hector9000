@@ -395,3 +395,40 @@ def test_slow_client_is_cut_off_after_the_total_deadline(live, monkeypatch):
         data = b""
     assert data == b"" and time.time() - t0 < 3
     sock.close()
+
+
+def test_global_login_limit_does_not_lock_out_the_admin_who_is_already_in(app):
+    # the admin's browser has logged in successfully a moment ago (it polls every 5 s)
+    assert app.route("GET", "/admin", basic(), ip="10.5.5.5")[0] == 200
+    for i in range(SS.GLOBAL_LOGIN_FAILS):                    # an attacker uses up the global budget
+        app.route("GET", "/admin", basic(pw="x"), ip="10.7.0.%d" % i)
+    assert app.route("GET", "/admin", basic(), ip="10.7.9.9")[0] == 429     # a stranger is locked out
+    assert app.route("GET", "/admin", basic(), ip="10.5.5.5")[0] == 200     # the known device is not
+    # the trust only lasts a while
+    app.clock_obj.t += SS.TRUST_S + 1
+    for i in range(SS.GLOBAL_LOGIN_FAILS):
+        app.route("GET", "/admin", basic(pw="x"), ip="10.7.1.%d" % i)
+    assert app.route("GET", "/admin", basic(), ip="10.5.5.5")[0] == 429
+
+
+def test_this_machine_is_never_locked_out_by_the_global_limit(app):
+    for i in range(SS.GLOBAL_LOGIN_FAILS):
+        app.route("GET", "/admin", basic(pw="x"), ip="10.7.0.%d" % i)
+    assert app.route("GET", "/admin", basic(), ip="127.0.0.1")[0] == 200
+
+
+def test_a_wrong_password_never_earns_trust(app):
+    assert app.route("GET", "/admin", basic(pw="x"), ip="10.6.6.6")[0] == 401
+    for i in range(SS.GLOBAL_LOGIN_FAILS):
+        app.route("GET", "/admin", basic(pw="x"), ip="10.7.0.%d" % i)
+    assert app.route("GET", "/admin", basic(), ip="10.6.6.6")[0] == 429
+
+
+def test_a_client_that_hangs_up_does_not_spam_the_log(live, capsys):
+    port = live.server_address[1]
+    for _ in range(5):
+        sock = socket.create_connection(("127.0.0.1", port), timeout=5)
+        sock.sendall(b"GET /api/stats HTTP/1.0\r\n\r\n")
+        sock.close()                       # gone before the answer is written
+    time.sleep(0.5)
+    assert "Traceback" not in capsys.readouterr().err

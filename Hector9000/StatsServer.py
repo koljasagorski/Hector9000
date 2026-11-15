@@ -68,7 +68,8 @@ REPO_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 MAX_BODY = 4096
 STATS_CACHE_S = 5
 LOGIN_FAILS = 5              # per minute and address, then 429
-GLOBAL_LOGIN_FAILS = 20      # per minute over all addresses, then 429 for everybody
+GLOBAL_LOGIN_FAILS = 20      # per minute over all addresses, then 429 for strangers
+TRUST_S = 3600               # an address that logged in successfully is exempt from the global limit this long
 MAX_CONNECTIONS = 32         # simultaneous HTTP requests, more get a 503
 REQUEST_DEADLINE = 30        # seconds for one whole request, however slowly it is sent
 MIN_PASSWORD_LENGTH = 12
@@ -186,6 +187,7 @@ class StatsApp:
         self._cache = (0, None)
         self._fails = {}
         self._fails_all = []
+        self._trusted = {}                    # ip -> time of its last successful login
         self.admin_remote = admin_remote      # False: /admin and /api/admin only from this machine
         self.processes = None
         self.synced = None
@@ -201,7 +203,14 @@ class StatsApp:
         stamps = [t for t in self._fails.get(ip, []) if now - t < 60]
         if stamps:
             self._fails[ip] = stamps
-        return len(stamps) >= LOGIN_FAILS or len(self._fails_all) >= GLOBAL_LOGIN_FAILS
+        if len(stamps) >= LOGIN_FAILS:
+            return True
+        if len(self._fails_all) >= GLOBAL_LOGIN_FAILS:
+            # somebody is guessing from many addresses: lock out strangers, but not the admin's
+            # own device (it proved the password recently) and not this machine (SSH tunnel)
+            self._trusted = {k: t for k, t in self._trusted.items() if now - t < TRUST_S}
+            return ip not in self._trusted and not self._is_local(ip)
+        return False
 
     @staticmethod
     def _is_local(ip):
@@ -227,6 +236,7 @@ class StatsApp:
             ok_user = hmac.compare_digest(user.encode(), b"admin")
             ok_pw = hmac.compare_digest(pw.encode(), self.password.encode())
             if ok_user and ok_pw:
+                self._trusted[ip] = now
                 return True
             self._fails.setdefault(ip, []).append(now)
             self._fails_all.append(now)
@@ -495,6 +505,13 @@ class LimitedHTTPServer(ThreadingHTTPServer):
         finally:
             self._slots.release()
 
+    def handle_error(self, request, client_address):
+        # a client that hangs up or is too slow is normal on Wi-Fi: no traceback per drop
+        exc = sys.exc_info()[1]
+        if isinstance(exc, (ConnectionError, TimeoutError, socket.timeout)):
+            return
+        log("request from %s failed: %r" % (client_address[0], exc))
+
 
 class Handler(BaseHTTPRequestHandler):
     server_version = "Hector9000"
@@ -559,7 +576,7 @@ def build_app(args, env=None):
     recorder = StatsRecorder(
         store,
         on_error=lambda level, source, message: notifier.notify(
-            level, message, key="err:%s:%s" % (source, message), source=source))
+            level, message, key="err:%s:%s" % (source, message), source=source, untrusted=True))
     app = StatsApp(
         store, recorder, notifier, publish, load_admin_password(state_dir, env),
         bottle_names=lambda: read_bottle_names(find_hardware_db(env, state_dir)),

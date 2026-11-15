@@ -75,13 +75,18 @@ ist `NOPASSWD` ohnehin gesetzt.
   vertrauenswürdigen Netz betreiben, sonst einen Reverse-Proxy mit TLS davorsetzen oder
   `HECTOR_STATS_BIND=127.0.0.1` und nur lokal nutzen.
 * 5 Fehlversuche pro Minute und IP sperren den Login kurz; zusätzlich gilt ein Gesamtlimit von 20 Fehlversuchen pro
-  Minute für alle Adressen zusammen (gegen Raten aus vielen Adressen). Wer das Limit auslöst, sperrt kurz auch den
-  echten Admin aus: eine Minute warten.
+  Minute für alle Adressen zusammen (gegen Raten aus vielen Adressen). Das Gesamtlimit sperrt **Fremde**: ein Gerät,
+  das sich in der letzten Stunde erfolgreich angemeldet hat, und dieses Gerät selbst (`127.0.0.1`, SSH-Tunnel) sind
+  davon ausgenommen, der echte Admin wird also nicht ausgesperrt. Ein neues Gerät muss dann eine Minute warten.
 * **Auf einem fremden Netz (Kongress-WLAN)** `HECTOR_ADMIN_REMOTE=0` setzen und den Tunnel per SSH nutzen. Wer im
   selben WLAN mitliest, sieht sonst das Passwort bei jedem Abruf und kann damit Neustart, Ventile und Uhr bedienen.
 * Verbindungen sind begrenzt (32 gleichzeitig, danach `503`; eine Anfrage darf höchstens 30 s dauern, ein negatives
   oder zu großes `Content-Length` wird mit `400`/`413` abgelehnt). Die systemd-Unit setzt zusätzlich `MemoryMax`,
   `TasksMax` und `LimitNOFILE`.
+* **Obergrenzen gegen Fluten über MQTT** (der Broker ist auf dem alten Pi anonym): Pro Minute werden höchstens 40
+  Dosierungen, 60 Fehler und 120 sonstige Ereignisse aufgezeichnet. Die Tabellen behalten höchstens die neuesten
+  20 000 Dosierungen, 100 000 Zutatenzeilen, 5 000 Fehler und 5 000 Ereignisse (stündliches Aufräumen); bei normaler
+  Nutzung wird das nie erreicht. Die Statistikseite zeigt dann die letzten 20 000 Drinks.
 * `POST` verlangt den Header `X-Hector-Admin: 1`, JSON als Content-Type und einen passenden
   `Origin` (gegen fremde Webseiten, die Aktionen auslösen wollen).
 * Statische Dateien kommen aus einer Whitelist (`/static/…`), kein Pfad nach oben, keine Punktdateien.

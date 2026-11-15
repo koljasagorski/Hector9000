@@ -37,6 +37,8 @@ LEVELS = {"info": 0, "warning": 1, "error": 2, "critical": 3}
 ICONS = {"info": "ℹ️", "warning": "🟠", "error": "🔴", "critical": "🚨"}
 
 MAX_QUEUE = 50
+MAX_UNTRUSTED_PER_HOUR = 20   # alerts that were derived from MQTT payloads (anyone on the broker)
+MAX_UNTRUSTED_TEXT = 300
 MAX_AGE_S = 6 * 3600          # older messages are no longer worth sending
 MAX_BACKOFF_S = 300
 MAX_TEXT = 1500
@@ -128,17 +130,21 @@ def backends_from_env(env=None):
 class Notifier:
 
     def __init__(self, backends=None, min_level="warning", dedup_s=3600, clock=time.time,
-                 max_queue=MAX_QUEUE, host="Hector9000"):
+                 max_queue=MAX_QUEUE, host="Hector9000", max_untrusted_per_hour=MAX_UNTRUSTED_PER_HOUR):
         self.backends = list(backends or [])
         self.min_level = LEVELS.get(min_level, 1)
         self.dedup_s = dedup_s
         self.clock = clock
         self.max_queue = max_queue
         self.host = host
+        self.max_untrusted = max_untrusted_per_hour
+        self._untrusted_times = []
+        self._flood_reported = False
         self.queue = []
         self.sent_keys = {}          # key -> time of the last alert that was queued
         self.active = set()          # keys with an unresolved alert
-        self.stats = {"sent": 0, "dropped": 0, "failed": 0, "last_ok": None, "last_error": None}
+        self.stats = {"sent": 0, "dropped": 0, "failed": 0, "suppressed": 0,
+                      "last_ok": None, "last_error": None}
         self._lock = threading.RLock()
         self._wake = threading.Event()
         self._thread = None
@@ -149,17 +155,25 @@ class Notifier:
     def enabled(self):
         return bool(self.backends)
 
-    def notify(self, level, message, key=None, source=""):
-        """Queue an alert. Returns True if it will be sent."""
+    def notify(self, level, message, key=None, source="", untrusted=False):
+        """Queue an alert. Returns True if it will be sent.
+
+        untrusted=True marks alerts whose text came from an MQTT message (the broker may be
+        anonymous): they are clipped harder and limited to a few per hour, so nobody can
+        use the chat room as a spam channel. Checks made by the service itself are not limited."""
         try:
             level = level if level in LEVELS else "error"
             if LEVELS[level] < self.min_level or not self.backends:
                 return False
             now = self.clock()
+            if untrusted:
+                message = str(message)[:MAX_UNTRUSTED_TEXT]
             key = key or "%s:%s" % (source, message)
             with self._lock:
                 last = self.sent_keys.get(key)
                 if last is not None and now - last < self.dedup_s:
+                    return False
+                if untrusted and not self._untrusted_allowed(now):
                     return False
                 self.sent_keys[key] = now
                 self.active.add(key)
@@ -171,6 +185,22 @@ class Notifier:
             return True
         except Exception:
             return False
+
+    def _untrusted_allowed(self, now):
+        """Caller holds the lock. At most max_untrusted alerts per hour; one summary says so."""
+        self._untrusted_times = [t for t in self._untrusted_times if now - t < 3600]
+        if len(self._untrusted_times) >= self.max_untrusted:
+            self.stats["suppressed"] += 1
+            if not self._flood_reported:
+                self._flood_reported = True
+                self._enqueue("warning", "Sehr viele Fehlermeldungen in kurzer Zeit - weitere werden "
+                              "bis zu einer Stunde lang unterdrückt (Details im Admin-Dashboard)",
+                              "notifier", now)
+                self._wake.set()
+            return False
+        self._flood_reported = False
+        self._untrusted_times.append(now)
+        return True
 
     def resolve(self, key, message):
         """Tell that a problem is gone - only if its alert was sent."""
