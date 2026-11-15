@@ -63,7 +63,7 @@ password() {
     echo "Admin-Dashboard: http://$(hostname -I 2>/dev/null | awk '{print $1}'):8080/admin"
     echo "Benutzer: admin"
     local pw
-    if pw="$($SUDO cat /var/lib/hector9000/stats/admin_password 2>/dev/null)" && [ -n "$pw" ]; then
+    if pw="$($SUDO -u hector-stats cat /var/lib/hector9000/stats/admin_password 2>/dev/null)" && [ -n "$pw" ]; then
         echo "Passwort: $pw"
         echo
         echo "(Ändern: HECTOR_ADMIN_PASSWORD in /etc/hector9000/hector.env, dann hector-stats neu starten.)"

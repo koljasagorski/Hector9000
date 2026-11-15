@@ -137,3 +137,21 @@ def test_set_time_range_matches_the_sudoers_rule():
     assert "@1[7-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]" in text         # 10 digits, 1.7e9 .. 1.99e9
     assert hs.parse_epoch("1700000000") == 1700000000 and hs.parse_epoch("1999999999") == 1999999999
     assert hs.parse_epoch("1699999999") is None and hs.parse_epoch("2000000000") is None
+
+
+def test_sudoers_gives_root_nothing_but_the_fixed_commands():
+    path = os.path.join(os.path.dirname(__file__), "..", "deploy", "sudoers.d", "hector9000")
+    rules = [ln.strip() for ln in open(path).read().splitlines() if ln.strip().startswith("hector ALL=")]
+    as_root = [r for r in rules if r.startswith("hector ALL=(root)")]
+    assert len(as_root) == 1 and "HECTOR_SHOWPW" not in as_root[0]       # reading the password is never done as root
+    assert any(r.startswith("hector ALL=(hector-stats)") and "HECTOR_SHOWPW" in r for r in rules)
+    assert not any("ALL=(ALL" in r or "NOPASSWD: ALL" in r for r in rules)
+    maint = open(os.path.join(os.path.dirname(__file__), "..", "deploy", "hector-maint")).read()
+    assert "-u hector-stats cat /var/lib/hector9000/stats/admin_password" in maint
+
+
+def test_provision_never_lets_root_follow_links_in_the_hector_owned_state_dir():
+    text = open(os.path.join(os.path.dirname(__file__), "..", "deploy", "provision.sh")).read()
+    assert 'die "${STATE_DIR} is a symlink' in text and 'die "${STATS_DIR} is a symlink' in text
+    assert 'chown -h "$STATS_USER:$STATS_USER"' in text
+    assert 'runuser -u "$HECTOR_USER" -- chmod o+r' in text

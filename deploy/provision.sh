@@ -241,6 +241,11 @@ fi
 # --------------------------------------------------------------- 4. dirs
 log "Directories"
 run install -d -m 0755 "$PREFIX"
+# STATE_DIR belongs to the hector user (the one that talks to MQTT). Root must never follow a
+# link that this user could have planted there, so links are refused or skipped everywhere
+# below, and the one chmod on the hector-owned database runs as that user, not as root.
+[ ! -L "$STATE_DIR" ] || die "${STATE_DIR} is a symlink - refusing (changed by hand?)"
+[ ! -L "$STATS_DIR" ] || die "${STATS_DIR} is a symlink - refusing (changed by hand?)"
 # STATE_DIR is traversable (x) for others so that the statistics service can reach its own
 # subdirectory and read the recipe database; nobody but hector can list or write it.
 run install -d -m 0751 -o "$HECTOR_USER" -g "$HECTOR_USER" "$STATE_DIR"
@@ -248,14 +253,20 @@ run install -d -m 0750 -o "$STATS_USER" -g "$STATS_USER" "$STATS_DIR"
 # before the statistics service had its own user, its files lived in STATE_DIR: move them
 if [ "$DRY_RUN" = 0 ]; then
     for f in stats.db stats.db-wal stats.db-shm admin_password notify.json; do
-        if [ -f "${STATE_DIR}/${f}" ] && [ ! -e "${STATS_DIR}/${f}" ]; then
-            info "move: ${STATE_DIR}/${f} -> ${STATS_DIR}/"
-            mv "${STATE_DIR}/${f}" "${STATS_DIR}/${f}"
-            chown "$STATS_USER:$STATS_USER" "${STATS_DIR}/${f}"
+        src="${STATE_DIR}/${f}"; dst="${STATS_DIR}/${f}"
+        if [ -L "$src" ]; then
+            warn "ignoring ${src}: it is a symlink"
+        elif [ -f "$src" ] && [ ! -e "$dst" ] && [ ! -L "$dst" ]; then
+            info "move: ${src} -> ${STATS_DIR}/"
+            mv -n "$src" "$dst"
+            chown -h "$STATS_USER:$STATS_USER" "$dst"
         fi
     done
     # the recipe database may be read by the statistics service (bottle names)
-    for f in "${STATE_DIR}"/h9k.db*; do [ -f "$f" ] && chmod o+r "$f"; done
+    for f in "${STATE_DIR}"/h9k.db*; do
+        [ -f "$f" ] && [ ! -L "$f" ] || continue
+        runuser -u "$HECTOR_USER" -- chmod o+r "$f" || warn "could not make ${f} readable"
+    done
 fi
 # /etc/hector9000 is readable by everybody (config.json for the hardware services); only the
 # secrets file hector.env is private to the statistics service

@@ -23,8 +23,12 @@ Cmnd_Alias HECTOR_CLOCK = \
     /usr/bin/date -u -s @1[7-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]
 
 # Maintenance menu on the machine's own console: show the admin password that the
-# statistics service generated on its first start (fixed file, no argument that can change).
+# statistics service generated on its first start. It is read AS hector-stats (not as
+# root): the directory above the file belongs to "hector", so that user could replace
+# "stats" by a link - as hector-stats such a link leads nowhere but to files that the
+# statistics service may read anyway. Fixed file, no argument that can change.
 Cmnd_Alias HECTOR_SHOWPW = \
     /usr/bin/cat /var/lib/hector9000/stats/admin_password
 
-hector ALL=(root) NOPASSWD: HECTOR_CTL, HECTOR_CLOCK, HECTOR_SHOWPW
+hector ALL=(root) NOPASSWD: HECTOR_CTL, HECTOR_CLOCK
+hector ALL=(hector-stats) NOPASSWD: HECTOR_SHOWPW
