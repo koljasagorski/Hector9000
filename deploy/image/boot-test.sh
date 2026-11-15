@@ -54,8 +54,8 @@ up() {
 }
 
 wait_ready() {
-    local i
-    for i in $(seq 1 60); do
+    local _
+    for _ in $(seq 1 60); do
         if docker exec "$NAME" chroot /newroot systemctl is-system-running 2>/dev/null | grep -qE '^(running|degraded)$'; then return 0; fi
         sleep 1
     done
