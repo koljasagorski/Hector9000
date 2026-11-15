@@ -155,10 +155,18 @@ nav.tabs .badge { background: var(--bad); color: var(--on-sev); font-family: var
 .field { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .field.nowrap { flex-wrap: nowrap; }
 .field.nowrap input { flex: 0 1 7em; min-width: 4em; }
-input[type=number], input[type=text], select {
+input[type=number], input[type=text], input[type=password], select {
     font: inherit; background: var(--bg); color: var(--fg); border: 3px solid var(--accent);
     padding: 4px 8px; min-height: 36px; border-radius: 0; width: 7em;
 }
+input.wide, select.wide { width: min(100%, 30em); box-sizing: border-box; }
+.formrow { display: grid; gap: 4px; margin: 12px 0; }
+.formrow .lbl { opacity: .8; }
+label.check { display: flex; gap: 10px; align-items: center; cursor: pointer; }
+input[type=checkbox] { width: 22px; height: 22px; accent-color: var(--accent); }
+details.help { margin-top: 16px; }
+details.help summary { cursor: pointer; opacity: .85; }
+details.help ol { padding-left: 22px; margin: 8px 0 0; }
 .pbar { height: 16px; background: var(--muted); position: relative; min-width: 80px; }
 .pbar i { position: absolute; inset: 0 auto 0 0; background: var(--accent); }
 .pbar i.low { background: var(--bad); }

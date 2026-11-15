@@ -38,7 +38,7 @@ Im schlanken OS startet `deploy/systemd/hector-stats.service` den Dienst. Auf de
 | `HECTOR_DB` | `$HECTOR_STATE_DIR/h9k.db`, dann `./h9k.db` | Hardware-DB, wird nur gelesen (Flaschennamen) |
 | `HECTOR_EXPECT_PROCESSES` | `server,controller,led` | Prozesse, die der Watchdog erwartet (`""` = nicht prüfen) |
 | `HECTOR_ENV_FILE` | `/etc/hector9000/hector.env` | `KEY=VALUE`-Datei, ergänzt die Umgebung (bereits gesetzte Werte gewinnen) |
-| `HECTOR_MATRIX_*`, `HECTOR_NOTIFY_LEVEL` | – | Chat-Bot, siehe [matrix.md](matrix.md) |
+| `HECTOR_MATRIX_*`, `HECTOR_NOTIFY_LEVEL` | – | Chat-Bot, siehe [matrix.md](matrix.md). Lässt sich auch im Dashboard (Reiter „Chat“) einstellen; das Gespeicherte (`notify.json` im Zustandsordner) hat dann Vorrang |
 
 Das erzeugte Admin-Passwort steht in `admin_password`. Es gehört **nicht** ins Repository
 (`.gitignore` schließt die Datei aus).
@@ -59,9 +59,9 @@ Verteilung nach Stunde/Wochentag (Heatmap), 60 Tage / 12 Wochen / 24 Stunden, Wa
 
 ## Admin-Dashboard
 
-Reiter: Übersicht, Fehler, Flaschen, Aktionen, System, Verlauf. Aktionen: Neustart, Kiosk beenden,
+Reiter: Übersicht, Fehler, Flaschen, Aktionen, **Chat** (Matrix-Bot einrichten, testen, Status), System, Verlauf. Aktionen: Neustart, Kiosk beenden,
 Reinigen, Trocknen, Ventile öffnen/schließen, LED-Modus, Flasche aufgefüllt/Kapazität,
-Fehler quittieren, Test-Nachricht an den Chat und **Uhr stellen** (der Pi hat keine Echtzeituhr;
+Fehler quittieren, Matrix-Einstellungen speichern/löschen, Raum beitreten, Test-Nachricht an den Chat und **Uhr stellen** (der Pi hat keine Echtzeituhr;
 ohne Netz geht die Uhr falsch). Gefährliches (Neustart, Reinigen, …) braucht einen Doppeltipp und
 wird **während einer Dosierung abgelehnt** (Ventile schließen geht immer).
 
@@ -87,6 +87,9 @@ ist `NOPASSWD` ohnehin gesetzt.
   Dosierungen, 60 Fehler und 120 sonstige Ereignisse aufgezeichnet. Die Tabellen behalten höchstens die neuesten
   20 000 Dosierungen, 100 000 Zutatenzeilen, 5 000 Fehler und 5 000 Ereignisse (stündliches Aufräumen); bei normaler
   Nutzung wird das nie erreicht. Die Statistikseite zeigt dann die letzten 20 000 Drinks.
+* **Matrix-Token im Dashboard:** wird in `notify.json` (`0600`) abgelegt, ist nur schreibbar (kommt nie zurück in den
+  Browser, nicht in `/api/admin/overview`, nicht in den Verlauf) und wird bei Eingabe über Klartext-HTTP mitgelesen, wenn jemand
+  im Netz lauscht. Deshalb: SSH-Tunnel oder `hector.env`, siehe [matrix.md](matrix.md).
 * `POST` verlangt den Header `X-Hector-Admin: 1`, JSON als Content-Type und einen passenden
   `Origin` (gegen fremde Webseiten, die Aktionen auslösen wollen).
 * Statische Dateien kommen aus einer Whitelist (`/static/…`), kein Pfad nach oben, keine Punktdateien.
@@ -97,6 +100,6 @@ ist `NOPASSWD` ohnehin gesetzt.
 ## Tests
 
     python -m pytest tests/test_Stats.py tests/test_StatsServer.py tests/test_Notifier.py \
-        tests/test_Watchdog.py tests/test_ControllerEvents.py tests/test_HectorConfig.py
+        tests/test_NotifySettings.py tests/test_Watchdog.py tests/test_ControllerEvents.py tests/test_HectorConfig.py
 
 (Kein Broker nötig; die älteren Tests benötigen einen lokalen MQTT-Broker.)

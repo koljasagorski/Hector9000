@@ -6,7 +6,7 @@
     var ov = null, tab = "overview";
 
     var TABS = [["overview", "Übersicht"], ["errors", "Fehler"], ["bottles", "Flaschen"],
-        ["actions", "Aktionen"], ["system", "System"], ["history", "Verlauf"]];
+        ["actions", "Aktionen"], ["chat", "Chat"], ["system", "System"], ["history", "Verlauf"]];
     var KINDS = { boot: "Start", clean: "Reinigung", dry: "Trocknung", valves_open: "Ventile auf", valves_close: "Ventile zu",
         reboot: "Neustart", kiosk_exit: "Kiosk verlassen", doom: "Doom", service: "Dienst", admin: "Admin" };
     var STATUS = { ok: "ok", partial: "unvollständig", failed: "fehlgeschlagen", aborted: "abgebrochen", running: "läuft" };
@@ -151,7 +151,7 @@
 
     // -------------------------------------------------------------- actions ---
     function actions() {
-        var n = ov.notifier, drift = Date.now() / 1000 - ov.clock.server_time;
+        var drift = Date.now() / 1000 - ov.clock.server_time;
         var busy = ov.live.state === "dosing";
         return h("div", {}, [
             h("section", { class: "card" }, [panelHead("Maschine", busy ? "gerade wird ein Drink gemacht – Wartung gesperrt" : ""),
@@ -169,13 +169,6 @@
                 h("div", { class: "actions" }, ["theme", "random", "idle", "off"].map(function (m) {
                     return actionButton({ theme: "Theme", random: "Zufall", idle: "Ruhe", off: "Aus" }[m], "led_mode", { mode: m });
                 }))]),
-            h("section", { class: "card" }, [panelHead("Benachrichtigung", n.enabled ? n.backends.join(", ") + " aktiv" : "nicht eingerichtet"),
-                h("dl", { class: "kv" }, [h("dt", { text: "Mindest-Stufe" }), h("dd", { text: n.min_level }),
-                    h("dt", { text: "Gesendet" }), h("dd", { text: String(n.sent) }), h("dt", { text: "In der Warteschlange" }), h("dd", { text: String(n.queued) }),
-                    h("dt", { text: "Letzter Fehler" }), h("dd", { text: n.last_error || "–" }),
-                    h("dt", { text: "Offene Alarme" }), h("dd", { text: n.active_alerts.join(", ") || "–" })]),
-                h("p", {}, actionButton("Testnachricht senden", "test_notification")),
-                n.enabled ? null : h("p", { class: "note", text: "Matrix einrichten: docs/matrix.md (Homeserver, Raum und Token kommen in /etc/hector9000/hector.env, nie ins Repository)." })]),
             h("section", { class: "card" }, [panelHead("Uhr", "Maschine ↔ dieses Gerät"),
                 h("p", { text: "Abweichung: " + (Math.abs(drift) < 2 ? "keine" : H.dur(Math.abs(drift)) + (drift > 0 ? " (Maschine geht nach)" : " (Maschine geht vor)")) +
                     " · NTP: " + (ov.clock.synced === null ? "unbekannt" : ov.clock.synced ? "synchron" : "nicht synchron") }),
@@ -186,6 +179,91 @@
                 h("div", { class: "actions" }, [["doses", "Drinks"], ["ingredient_use", "Zutaten"], ["errors", "Fehler"], ["events", "Ereignisse"], ["samples", "Messwerte"]].map(function (t) {
                     return h("a", { class: "btn", href: "/api/admin/export?table=" + t[0], text: t[1] + " (CSV)" });
                 }))])
+        ]);
+    }
+
+    // ----------------------------------------------------------------- chat ---
+    var LEVELS = [["info", "Alles (auch Hinweise)"], ["warning", "Warnungen und schlimmer"],
+        ["error", "Nur Fehler"], ["critical", "Nur Kritisches"]];
+    var MSGTYPES = [["m.text", "Normale Nachricht (meldet sich auf dem Handy)"], ["m.notice", "Bot-Hinweis (meist ohne Ton)"]];
+    var draft = null;     // unsaved form values; they survive the 5 s refresh. The server never sends the token back.
+
+    function chatDraft() {
+        if (!draft) {
+            var c = ov.notify_config;
+            draft = { enabled: c.source === "dashboard" ? !!c.stored_enabled : true, homeserver: c.homeserver || "",
+                room: c.room || "", token: "", level: c.level, msgtype: c.msgtype };
+        }
+        return draft;
+    }
+    function row(label, input, hint) {
+        return h("div", { class: "formrow" }, [h("label", { class: "lbl", text: label }, null), input,
+            hint ? h("span", { class: "note", text: hint }) : null]);
+    }
+    function textField(key, type, placeholder, label) {
+        var d = chatDraft();
+        var el = h("input", { type: type, class: "wide", value: d[key], placeholder: placeholder, "aria-label": label,
+            autocomplete: type === "password" ? "new-password" : "off", spellcheck: "false", autocapitalize: "off" });
+        el.addEventListener("input", function () { d[key] = el.value; });
+        return el;
+    }
+    function selectField(key, options, label) {
+        var d = chatDraft();
+        var el = h("select", { class: "wide", "aria-label": label }, options.map(function (o) {
+            return h("option", { value: o[0], selected: d[key] === o[0], text: o[1] });
+        }));
+        el.addEventListener("change", function () { d[key] = el.value; });
+        return el;
+    }
+    function saveChat() {
+        var d = chatDraft();
+        run("save_notify", { enabled: d.enabled, homeserver: d.homeserver, room: d.room, token: d.token, level: d.level, msgtype: d.msgtype },
+            function (r) { if (r.ok) draft = null; });
+    }
+
+    function chat() {
+        var c = ov.notify_config, n = ov.notifier, d = chatDraft();
+        var plain = location.protocol === "http:" && !/^(localhost|127\.0\.0\.1|\[::1\])$/.test(location.hostname);
+        var source = { dashboard: "Einstellungen aus diesem Dashboard", env: "Einstellungen aus hector.env – Speichern übernimmt sie hierher",
+            none: "noch nicht eingerichtet" }[c.source];
+        var enabledBox = h("input", { type: "checkbox", id: "chat-enabled", checked: d.enabled });
+        enabledBox.addEventListener("change", function () { d.enabled = enabledBox.checked; });
+        var buttons = [
+            h("button", { class: "btn fill", type: "button", text: "Speichern", onclick: saveChat }),
+            h("button", { class: "btn", type: "button", disabled: !n.enabled, text: "Raum beitreten", onclick: function () { run("join_matrix"); } }),
+            h("button", { class: "btn", type: "button", disabled: !n.enabled, text: "Testnachricht senden", onclick: function () { run("test_notification"); } })
+        ];
+        if (c.source === "dashboard") buttons.push(dangerButton("Gespeicherte Einstellungen löschen", "reset_notify", {}));
+        return h("div", { class: "grid cols-2" }, [
+            h("section", { class: "card" }, [panelHead("Matrix-Chat", n.enabled ? "aktiv" : "aus"),
+                h("p", { class: "note", text: source }),
+                !c.editable ? h("div", { class: "hint bad", text: "Hier kann nichts gespeichert werden (kein Zustandsordner)." }) : null,
+                plain ? h("div", { class: "hint", text: "Diese Seite ist unverschlüsselt (HTTP): Der Token geht im Klartext durchs WLAN. " +
+                    "Besser über einen SSH-Tunnel eingeben (ssh -L 8080:localhost:8080 …, dann http://localhost:8080/admin)." }) : null,
+                h("div", { class: "formrow" }, h("label", { class: "check" }, [enabledBox, " Fehler in den Matrix-Chat senden"])),
+                row("Homeserver", textField("homeserver", "text", "https://matrix.example.org", "Homeserver"), "Muss mit https:// beginnen."),
+                row("Raum-ID", textField("room", "text", "!abc123:example.org", "Raum-ID"),
+                    "Beginnt mit ! (nicht der Alias mit #). In Element: Raum-Einstellungen → Erweitert. Der Raum muss unverschlüsselt sein."),
+                row("Zugangstoken des Bots", textField("token", "password", c.token_set ? "gespeichert (leer = behalten)" : "syt_…", "Zugangstoken"),
+                    c.token_set ? "Der gespeicherte Token wird nie angezeigt." : "Wie man ihn holt: docs/matrix.md."),
+                row("Welche Meldungen", selectField("level", LEVELS, "Mindest-Stufe")),
+                row("Nachrichtentyp", selectField("msgtype", MSGTYPES, "Nachrichtentyp")),
+                h("div", { class: "actions" }, buttons),
+                h("details", { class: "help" }, [h("summary", { text: "So richtest du den Bot ein" }), h("ol", {}, [
+                    h("li", { text: "Ein eigenes Bot-Konto auf einem Matrix-Server anlegen (nicht dein privates)." }),
+                    h("li", { text: "Einen unverschlüsselten Raum anlegen und das Bot-Konto einladen." }),
+                    h("li", { text: "Den Zugangstoken des Bots holen (Befehl in docs/matrix.md)." }),
+                    h("li", { text: "Oben Homeserver, Raum-ID und Token eintragen und speichern." }),
+                    h("li", { text: "„Raum beitreten“ drücken (nimmt die Einladung an), dann „Testnachricht senden“." })])])]),
+            h("section", { class: "card" }, [panelHead("Status", n.backends.length ? n.backends.join(", ") : "kein Dienst"),
+                h("dl", { class: "kv" }, [h("dt", { text: "Mindest-Stufe" }), h("dd", { text: n.min_level }),
+                    h("dt", { text: "Gesendet" }), h("dd", { text: String(n.sent) }),
+                    h("dt", { text: "In der Warteschlange" }), h("dd", { text: String(n.queued) }),
+                    h("dt", { text: "Unterdrückt (Flut)" }), h("dd", { text: String(n.suppressed) }),
+                    h("dt", { text: "Letzter Fehler" }), h("dd", { text: n.last_error || "–" }),
+                    h("dt", { text: "Offene Alarme" }), h("dd", { text: n.active_alerts.join(", ") || "–" })]),
+                h("p", { class: "note", text: "Meldungen warten bei fehlendem Netz bis zu 6 Stunden. Gleiche Meldungen kommen höchstens einmal pro Stunde. " +
+                    "Fehler stehen immer im Reiter „Fehler“, auch wenn der Chat aus ist." })])
         ]);
     }
 
@@ -231,7 +309,7 @@
         ]);
     }
 
-    var VIEWS = { overview: overview, errors: errors, bottles: bottles, actions: actions, system: system, history: history };
+    var VIEWS = { overview: overview, errors: errors, bottles: bottles, actions: actions, chat: chat, system: system, history: history };
 
     function tabs() {
         var nav = H.clear(H.$("tabs")), unacked = ov.errors.filter(function (e) { return !e.acked; }).length;
@@ -244,7 +322,7 @@
     function render() {
         if (!ov) return;
         var focused = document.activeElement;
-        if (focused && focused.tagName === "INPUT" && H.$("main").contains(focused)) return;   // don't eat typing
+        if (focused && /^(INPUT|SELECT|TEXTAREA)$/.test(focused.tagName) && H.$("main").contains(focused)) return;   // don't eat typing
         var main = H.clear(H.$("main"));
         main.appendChild(VIEWS[tab]());
         tabs();

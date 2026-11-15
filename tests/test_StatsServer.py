@@ -432,3 +432,135 @@ def test_a_client_that_hangs_up_does_not_spam_the_log(live, capsys):
         sock.close()                       # gone before the answer is written
     time.sleep(0.5)
     assert "Traceback" not in capsys.readouterr().err
+
+
+# ------------------------------------------------ Matrix settings in the dashboard --
+@pytest.fixture
+def cfg_app(web, tmp_path, monkeypatch):
+    """An app whose Matrix settings can be edited (state dir + empty environment)."""
+    calls = []
+
+    def fake_open(req, timeout=10):
+        calls.append((req.get_method(), req.full_url, req.get_header("Authorization")))
+        return type("R", (), {"__enter__": lambda s: s, "__exit__": lambda s, *a: False,
+                              "read": lambda s, n=-1: b"{}"})()
+
+    monkeypatch.setattr(N, "_open_no_redirect", fake_open)
+    clock = Clock()
+    store = StatsStore(":memory:")
+    notifier = N.Notifier([], clock=clock)
+    recorder = StatsRecorder(store, on_error=lambda l, s, m: None)
+    state = tmp_path / "state"
+    a = SS.StatsApp(store, recorder, notifier, lambda t, p, r=False: None, "s3cret",
+                    health=lambda: {}, clock=clock, web_dir=web, state_dir=str(state), env={})
+    a.http_calls, a.state = calls, state
+    return a
+
+
+FORM = {"action": "save_notify", "enabled": True, "homeserver": "https://matrix.example.org",
+        "room": "!abc:example.org", "token": "syt_secrettoken123", "level": "error", "msgtype": "m.notice"}
+
+
+def test_saving_matrix_settings_switches_the_notifier_on_without_a_restart(cfg_app):
+    assert not cfg_app.notifier.enabled
+    res = post(cfg_app, FORM)
+    assert res[0] == 200 and body_json(res)["ok"] is True
+    assert cfg_app.notifier.enabled and cfg_app.notifier.status()["min_level"] == "error"
+    assert cfg_app.notifier.backends[0].msgtype == "m.notice"
+    path = cfg_app.state / "notify.json"
+    assert oct(os.stat(path).st_mode & 0o777) == "0o600"
+    cfg = body_json(res)["config"]
+    assert cfg["source"] == "dashboard" and cfg["token_set"] is True and cfg["enabled"] is True
+
+
+def test_the_token_never_leaves_the_server(cfg_app):
+    post(cfg_app, FORM)
+    overview = cfg_app.route("GET", "/api/admin/overview", basic(), b"", "10.0.0.5")[2].decode()
+    assert "syt_secrettoken123" not in overview
+    saved = post(cfg_app, dict(FORM, token=""))[2].decode()
+    assert "syt_secrettoken123" not in saved
+    assert "syt_secrettoken123" not in json.dumps(cfg_app.store.recent_events(50))
+    assert "syt_secrettoken123" not in cfg_app.route("GET", "/api/stats", {}, b"", "10.0.0.5")[2].decode()
+
+
+def test_an_empty_token_field_keeps_the_stored_token(cfg_app):
+    post(cfg_app, FORM)
+    res = post(cfg_app, dict(FORM, token="", level="warning"))
+    assert body_json(res)["ok"] is True
+    assert cfg_app.notifier.backends[0].token == "syt_secrettoken123"
+    assert cfg_app.notifier.status()["min_level"] == "warning"
+
+
+@pytest.mark.parametrize("change", [{"homeserver": "http://matrix.example.org"}, {"room": "#alias:example.org"},
+                                    {"token": "kurz"}, {"level": "laut"}, {"homeserver": ""}])
+def test_invalid_settings_are_refused_and_change_nothing(cfg_app, change):
+    post(cfg_app, FORM)
+    before = cfg_app.notifier.backends[0].homeserver
+    res = post(cfg_app, dict(FORM, **change))
+    assert res[0] == 400 and body_json(res)["ok"] is False and body_json(res)["error"]
+    assert cfg_app.notifier.backends[0].homeserver == before
+    assert json.load(open(cfg_app.state / "notify.json"))["room"] == "!abc:example.org"
+
+
+def test_switching_matrix_off_keeps_the_values_but_stops_sending(cfg_app):
+    post(cfg_app, FORM)
+    res = post(cfg_app, dict(FORM, enabled=False, token=""))
+    assert body_json(res)["ok"] is True and not cfg_app.notifier.enabled
+    cfg = body_json(res)["config"]
+    assert cfg["enabled"] is False and cfg["token_set"] is True and cfg["homeserver"]
+
+
+def test_reset_deletes_the_file_and_falls_back_to_the_environment(cfg_app):
+    cfg_app.env = {"HECTOR_MATRIX_HOMESERVER": "https://env.example", "HECTOR_MATRIX_ROOM": "!e:env",
+                   "HECTOR_MATRIX_TOKEN": "envtoken1234", "HECTOR_NOTIFY_LEVEL": "info"}
+    post(cfg_app, FORM)
+    assert cfg_app.notifier.backends[0].homeserver == "https://matrix.example.org"
+    res = post(cfg_app, {"action": "reset_notify"})
+    assert body_json(res)["ok"] is True and not (cfg_app.state / "notify.json").exists()
+    assert cfg_app.notifier.backends[0].homeserver == "https://env.example"
+    assert cfg_app.notifier.status()["min_level"] == "info"
+    assert body_json(res)["config"]["source"] == "env"
+
+
+def test_join_uses_the_saved_settings_and_reports_failures(cfg_app):
+    res = post(cfg_app, {"action": "join_matrix"})
+    assert res[0] == 400 and "nicht eingerichtet" in body_json(res)["error"]
+    post(cfg_app, FORM)
+    res = post(cfg_app, {"action": "join_matrix"})
+    assert body_json(res)["ok"] is True
+    assert cfg_app.http_calls[-1] == ("POST", "https://matrix.example.org/_matrix/client/v3/join/%21abc%3Aexample.org",
+                                      "Bearer syt_secrettoken123")
+
+
+def test_settings_actions_need_the_admin_login_and_the_csrf_header(cfg_app):
+    for action in ("save_notify", "reset_notify", "join_matrix"):
+        assert post(cfg_app, dict(FORM, action=action), headers={"Authorization": ""})[0] == 401
+        assert post(cfg_app, dict(FORM, action=action), headers={"X-Hector-Admin": "0"})[0] == 403
+    assert not (cfg_app.state / "notify.json").exists()
+
+
+def test_without_a_state_dir_the_settings_cannot_be_saved(app):
+    assert post(app, FORM)[0] == 400
+    assert body_json(app.route("GET", "/api/admin/overview", basic(), b"", "10.0.0.5"))["notify_config"]["editable"] is False
+
+
+def test_stored_settings_are_used_at_startup(web, tmp_path):
+    from Hector9000.utils import NotifySettings as NS
+    NS.save(str(tmp_path), {"enabled": True, "homeserver": "https://m.example", "room": "!r:m",
+                            "token": "syt_stored_token", "level": "critical", "msgtype": "m.text"})
+    ns = type("A", (), {"demo": False})()
+    app = SS.build_app(ns, env={"HECTOR_STATE_DIR": str(tmp_path), "HECTOR_ADMIN_PASSWORD": "x" * 14,
+                                "HECTOR_DB": str(tmp_path / "none.db")})
+    assert app.notifier.enabled and app.notifier.status()["min_level"] == "critical"
+    assert app.notifier.backends[0].token == "syt_stored_token"
+
+
+def test_first_save_after_a_hector_env_setup_keeps_the_env_token(cfg_app):
+    cfg_app.env = {"HECTOR_MATRIX_HOMESERVER": "https://env.example", "HECTOR_MATRIX_ROOM": "!e:env",
+                   "HECTOR_MATRIX_TOKEN": "envtoken1234"}
+    cfg = cfg_app.notify_config()
+    assert cfg["source"] == "env" and cfg["token_set"] is True and cfg["homeserver"] == "https://env.example"
+    res = post(cfg_app, dict(FORM, token="", homeserver="https://matrix.example.org"))
+    assert body_json(res)["ok"] is True
+    assert cfg_app.notifier.backends[0].token == "envtoken1234"
+    assert "envtoken1234" not in res[2].decode()

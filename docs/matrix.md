@@ -5,7 +5,32 @@ ein Dienst fehlt, Pi zu heiß, SD-Karte voll, Unterspannung. Ohne Konfiguration 
 die Nachrichten nur ins Log. Der Bot **sendet nur**; Befehle aus dem Chat sind vorbereitet, aber nicht gebaut
 (siehe unten).
 
-## Einrichten
+## Einrichten im Admin-Dashboard (empfohlen)
+
+Seit dem Reiter **„Chat“** im Admin-Dashboard (`/admin#chat`) braucht es keine Datei und keinen Neustart mehr:
+
+1. Bot-Konto, Raum und Token vorbereiten (Schritte 1 bis 3 unten).
+2. Im Reiter „Chat“ **Homeserver**, **Raum-ID** (beginnt mit `!`) und **Token** eintragen, Mindest-Stufe und
+   Nachrichtentyp wählen, **Speichern**. Die Änderung gilt sofort.
+3. **„Raum beitreten“** nimmt die Einladung des Bots an (der Bot kann erst nach dem Beitritt schreiben), danach
+   **„Testnachricht senden“**.
+
+Gespeichert wird in `$HECTOR_STATE_DIR/notify.json` (Rechte `0600`, steht in `.gitignore`, **nie ins Repository**).
+Diese Datei hat Vorrang vor den Variablen in `hector.env`; **„Gespeicherte Einstellungen löschen“** entfernt sie,
+dann gilt wieder `hector.env`. Der Haken „Fehler in den Matrix-Chat senden“ schaltet den Bot aus, ohne die Werte zu verlieren.
+
+* Der **Token ist nur schreibbar**: der Server schickt ihn nie zurück an den Browser, das Feld bleibt leer
+  („gespeichert, leer = behalten“). Er steht auch nicht im Verlauf oder im Log.
+* **Achtung Klartext:** Das Dashboard läuft über HTTP. Wer im selben WLAN mitliest, sieht den Token beim Eintragen
+  (und das Admin-Passwort bei jedem Aufruf). Die Seite warnt dann. Besser: den Token über einen SSH-Tunnel eintragen
+  (`ssh -L 8080:localhost:8080 <benutzer>@<pi>`, dann `http://localhost:8080/admin`) oder in `hector.env`.
+* Der Homeserver muss `https://` sein. `http://` (nur für einen Server im eigenen LAN) lässt sich ausschließlich mit
+  `HECTOR_MATRIX_ALLOW_HTTP=1` in `hector.env` freischalten, nicht im Dashboard. Weiterleitungen (Redirects) folgt der
+  Bot nie, der Token geht also nicht an einen anderen Server.
+* Wer sich im Dashboard anmelden kann, kann den Bot also auf einen **beliebigen https-Server** zeigen lassen. Das ist
+  gewollt, aber ein Grund mehr für ein starkes Admin-Passwort.
+
+## Einrichten über die Umgebung (Alternative, ohne Dashboard)
 
 1. **Bot-Konto** auf einem Homeserver anlegen (eigenes Konto, nicht das private).
 2. **Zugangstoken** holen, einmal an der Konsole (das Passwort nicht in die Shell-History schreiben):
@@ -17,7 +42,7 @@ die Nachrichten nur ins Log. Der Bot **sendet nur**; Befehle aus dem Chat sind v
    In der Antwort steht `access_token`.
 3. **Raum** anlegen und den Bot einladen. Der Raum muss **unverschlüsselt** sein: Ende-zu-Ende-Verschlüsselung
    wird nicht unterstützt (der Bot hat keine Schlüssel). Der Bot muss dem Raum **beigetreten** sein
-   (Einladung annehmen, z. B. `POST /_matrix/client/v3/join/<raum-id>` mit dem Token).
+   (Einladung annehmen: im Dashboard **„Raum beitreten“**, sonst `POST /_matrix/client/v3/join/<raum-id>` mit dem Token).
 4. Die Raum-ID (`!abc…:example.org`) und den Token in `/etc/hector9000/hector.env` eintragen
    (Datei mit Rechten `0600`, **nie ins Repository**; `deploy/hector.env.example` zeigt das Format):
 
@@ -26,7 +51,8 @@ die Nachrichten nur ins Log. Der Bot **sendet nur**; Befehle aus dem Chat sind v
        HECTOR_MATRIX_TOKEN=syt_…
        HECTOR_NOTIFY_LEVEL=warning
 
-5. Stats-Dienst neu starten und im Admin-Dashboard **„Test-Nachricht“** auslösen.
+5. Stats-Dienst neu starten und im Admin-Dashboard (Reiter „Chat“) **„Testnachricht senden“** auslösen. Beim ersten
+   Speichern im Dashboard wird der Token aus `hector.env` übernommen, man muss ihn nicht neu eintippen.
 
 | Variable | Standard | Bedeutung |
 |---|---|---|

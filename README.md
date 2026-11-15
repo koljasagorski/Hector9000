@@ -171,7 +171,7 @@ Statistics page, admin dashboard, chat alerts (fork additions)
   such as clean, dry, refill, reboot; dangerous ones are refused while a drink is being poured).
 
 A watchdog reports problems (service offline, errors, low bottles) through a notifier; the first backend is a
-**Matrix chat bot** (optional, off by default). Details: [`docs/stats.md`](docs/stats.md), [`docs/matrix.md`](docs/matrix.md).
+**Matrix chat bot** (optional, off by default; set up in the dashboard's "Chat" tab, no restart needed). Details: [`docs/stats.md`](docs/stats.md), [`docs/matrix.md`](docs/matrix.md).
 The cocktail **"Doom"** in the WebUI starts Doom (WebAssembly, free Freedoom levels); see the
 [WebUI repository](https://github.com/koljasagorski/Hector9000WebUI). A lean Raspberry Pi OS Lite setup with systemd units
 lives in [`deploy/`](deploy/README.md). Current state, update procedure and open points: [`docs/HANDOVER.md`](docs/HANDOVER.md).

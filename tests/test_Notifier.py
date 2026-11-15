@@ -239,3 +239,90 @@ def test_untrusted_text_is_clipped_harder():
     n, _ = make()
     n.notify("error", "A" * 5000, source="x", untrusted=True)
     assert len(n.queue[0]["text"]) < 500
+
+
+# ------------------------------------------------- runtime changes (dashboard) --
+def test_reconfigure_swaps_backend_and_level_and_drops_orphaned_messages():
+    old, new = Backend(), Backend()
+    old.name, new.name = "old", "new"
+    n, clock = make(old)
+    n.notify("error", "for the old one", key="a")
+    n.reconfigure([new], "critical")
+    assert n.queue == [] and n.stats["dropped"] == 1            # nobody left to deliver it
+    assert n.notify("error", "too low now", key="b") is False   # level went up
+    assert n.notify("critical", "now", key="c") is True
+    n.process(clock.t)
+    assert [t for t, _, _ in new.sent] == ["🚨 Hector9000: now"] and old.sent == []
+
+
+def test_reconfigure_keeps_messages_for_a_backend_that_stays():
+    b = Backend()
+    n, clock = make(b)
+    n.notify("error", "kept", key="a")
+    n.reconfigure([b], "warning")
+    assert n.process(clock.t) == 1 and len(b.sent) == 1
+
+
+def test_reconfigure_clears_the_stale_error_and_can_switch_everything_off():
+    b = Backend([N.PermanentError("Token falsch")])
+    n, clock = make(b)
+    n.notify("error", "x", key="a")
+    n.process(clock.t)
+    assert n.status()["last_error"] == "Token falsch"
+    n.reconfigure([], "warning")
+    assert n.status()["last_error"] is None and not n.enabled
+    assert n.notify("critical", "nobody listens") is False
+
+
+def test_reconfigure_starts_the_worker_only_if_start_was_called():
+    n = N.Notifier([], clock=Clock())
+    n.reconfigure([Backend()], "warning")
+    assert n._thread is None                                    # start() never called: tests, demo mode
+    n.reconfigure([], "warning")
+    n.start()                                                   # nothing configured yet: no thread
+    assert n._thread is None
+    n.reconfigure([Backend()], "warning")                       # configured later in the dashboard
+    assert n._thread is not None and n._thread.is_alive()
+
+
+def test_worker_survives_a_backend_removed_while_it_was_sending():
+    class Slow(Backend):
+        def send(self, text, level, txn):
+            n.reconfigure([], "warning")                        # the admin switches Matrix off mid-send
+            super().send(text, level, txn)
+    b = Slow()
+    n, clock = make(b)
+    n.notify("error", "x", key="a")
+    n.process(clock.t)                                          # must not raise
+    assert n.queue == []
+
+
+def test_matrix_join_posts_to_the_join_endpoint():
+    seen = {}
+
+    def opener(req, timeout):
+        seen.update(url=req.full_url, method=req.get_method(), body=json.loads(req.data),
+                    auth=req.get_header("Authorization"))
+        return FakeResponse(b"{}")
+
+    matrix(opener).join()
+    assert seen["method"] == "POST"
+    assert seen["url"] == "https://matrix.example.org/_matrix/client/v3/join/%21room%3Aexample.org"
+    assert seen["auth"] == "Bearer secret-token" and seen["body"] == {}
+
+
+def test_matrix_join_403_explains_the_invitation():
+    def opener(req, timeout):
+        raise http_error(403)
+    with pytest.raises(N.PermanentError) as e:
+        matrix(opener).join()
+    assert "eingeladen" in str(e.value)
+
+
+def test_default_opener_never_follows_redirects():
+    """The Authorization header must not be sent on to whatever host a redirect names."""
+    handler = N._NoRedirect()
+    req = N.urllib.request.Request("https://matrix.example.org/x", headers={"Authorization": "Bearer t"})
+    for code in (301, 302, 303, 307, 308):
+        assert handler.redirect_request(req, None, code, "moved", {}, "https://evil.example/") is None
+    assert matrix(None)._open is N._open_no_redirect

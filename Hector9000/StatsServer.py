@@ -27,7 +27,9 @@
 #                             (default: $HECTOR_STATE_DIR/h9k.db, then ./h9k.db)
 #     HECTOR_EXPECT_PROCESSES comma list of server,controller,led ("" = don't check)
 #     HECTOR_ENV_FILE         KEY=VALUE file, default /etc/hector9000/hector.env
-#     HECTOR_MATRIX_*         Matrix bot, see utils/Notifier.py and docs/matrix.md
+#     HECTOR_MATRIX_*         Matrix bot, see utils/Notifier.py and docs/matrix.md. The admin
+#                             dashboard can set these too (stored in $HECTOR_STATE_DIR/notify.json,
+#                             which then wins over the environment)
 #
 #   Usage: python3 Hector9000/StatsServer.py [--demo] [--port N]
 #          --demo  fake data and no MQTT, to look at the pages
@@ -46,6 +48,7 @@ import socket
 import sqlite3
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import urllib.parse
@@ -57,7 +60,7 @@ _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
-from Hector9000.utils import Events, Notifier, SystemHealth  # noqa: E402
+from Hector9000.utils import Events, Notifier, NotifySettings, SystemHealth  # noqa: E402
 from Hector9000.utils.StatsRecorder import StatsRecorder  # noqa: E402
 from Hector9000.utils.StatsStore import StatsStore  # noqa: E402
 from Hector9000.utils.Watchdog import Watchdog  # noqa: E402
@@ -174,8 +177,11 @@ class StatsApp:
 
     def __init__(self, store, recorder, notifier, publish, admin_password, health=None,
                  bottle_names=None, backend_dir=REPO_DIR, webui_dir=None, set_time_cmd=None,
-                 clock=time.time, web_dir=WEB_DIR, admin_remote=True):
+                 clock=time.time, web_dir=WEB_DIR, admin_remote=True, state_dir=None, env=None):
         self.store, self.recorder, self.notifier = store, recorder, notifier
+        self.state_dir = state_dir            # where notify.json lives; None = settings not editable
+        self.env = dict(os.environ if env is None else env)
+        self._notify_lock = threading.Lock()
         self.publish = publish
         self.password = admin_password
         self.health = health or SystemHealth.snapshot
@@ -309,9 +315,11 @@ class StatsApp:
             "bottles": self.store.bottle_levels(now, known),
             "samples": samples,
             "notifier": self.notifier.status(),
+            "notify_config": self.notify_config(),
             "messages": self.recorder.messages,
             "actions": sorted(list(MQTT_ACTIONS) + [
-                "led_mode", "refill", "set_bottle", "ack_errors", "test_notification", "set_time"]),
+                "led_mode", "refill", "set_bottle", "ack_errors", "test_notification", "set_time",
+                "save_notify", "reset_notify", "join_matrix"]),
         }
 
     # ---------------------------------------------------------- actions ---
@@ -358,7 +366,60 @@ class StatsApp:
                                "error": None if self.notifier.enabled else "Matrix ist nicht konfiguriert"})
         if name == "set_time":
             return self._set_time(args, now)
+        if name in ("save_notify", "reset_notify", "join_matrix"):
+            return self._notify_action(name, args, now)
         return self._json({"ok": False, "error": "unbekannte Aktion"}, 404)
+
+    # ------------------------------------------------- notification settings --
+    def notify_config(self):
+        """The Matrix settings for the dashboard. The token is never part of it."""
+        cfg = NotifySettings.describe(
+            NotifySettings.load(self.state_dir) if self.state_dir else None, self.env)
+        cfg["editable"] = bool(self.state_dir)
+        return cfg
+
+    def _apply_notify(self, settings):
+        """Build the backends for these settings (None = environment only) and swap them in.
+        Raises ValueError if they cannot be built; nothing changes in that case."""
+        merged = NotifySettings.merge_env(self.env, settings)
+        backends = Notifier.backends_from_env(merged)
+        self.notifier.reconfigure(backends, merged.get("HECTOR_NOTIFY_LEVEL", "warning"))
+
+    def _notify_action(self, name, args, now):
+        if not self.state_dir:
+            return self._json({"ok": False, "error": "Einstellungen sind hier nicht speicherbar"}, 400)
+        with self._notify_lock:
+            if name == "join_matrix":
+                backend = next((b for b in self.notifier.backends if hasattr(b, "join")), None)
+                if backend is None:
+                    return self._json({"ok": False, "error": "Matrix ist nicht eingerichtet"}, 400)
+                try:
+                    backend.join()
+                except (Notifier.PermanentError, Notifier.TemporaryError) as e:
+                    return self._json({"ok": False, "error": str(e)}, 502)
+                self.store.add_event(now, "admin", "join_matrix")
+                return self._json({"ok": True})
+            try:
+                if name == "reset_notify":
+                    self._apply_notify(None)             # may refuse: then the file stays as it is
+                    NotifySettings.delete(self.state_dir)
+                    self.store.add_event(now, "admin", "reset_notify")
+                    return self._json({"ok": True, "config": self.notify_config()})
+                current = dict(NotifySettings.load(self.state_dir) or {})
+                if not current.get("token"):          # set up in hector.env so far: keep that token
+                    current["token"] = self.env.get("HECTOR_MATRIX_TOKEN", "")
+                clean, error = NotifySettings.validate(
+                    args, current, allow_http=self.env.get("HECTOR_MATRIX_ALLOW_HTTP") == "1")
+                if error:
+                    return self._json({"ok": False, "error": error}, 400)
+                self._apply_notify(clean)            # builds first: a failure leaves the file alone
+                NotifySettings.save(self.state_dir, clean)
+            except ValueError as e:
+                return self._json({"ok": False, "error": str(e)}, 400)
+            except OSError as e:
+                return self._json({"ok": False, "error": "Konnte nicht speichern: %s" % e}, 500)
+            self.store.add_event(now, "admin", "save_notify")     # never the token
+            return self._json({"ok": True, "config": self.notify_config()})
 
     def _set_time(self, args, now):
         try:
@@ -566,8 +627,16 @@ def build_app(args, env=None):
     env = os.environ if env is None else env
     state_dir = env.get("HECTOR_STATE_DIR", ".")
     store = StatsStore(":memory:" if args.demo else os.path.join(state_dir, "stats.db"))
-    notifier = Notifier.Notifier(Notifier.backends_from_env(env),
-                                 min_level=env.get("HECTOR_NOTIFY_LEVEL", "warning"))
+    demo_dir = tempfile.TemporaryDirectory(prefix="hector-demo-") if args.demo else None
+    settings_dir = demo_dir.name if demo_dir else state_dir      # the demo must not write real settings
+    stored = NotifySettings.load(settings_dir)
+    merged = NotifySettings.merge_env(env, stored)
+    try:
+        backends = Notifier.backends_from_env(merged)
+    except ValueError as e:
+        log("WARNING: Matrix settings unusable, notifications are off: %s" % e)
+        backends = []
+    notifier = Notifier.Notifier(backends, min_level=merged.get("HECTOR_NOTIFY_LEVEL", "warning"))
     publisher = {"fn": lambda topic, payload, retained=False: log("demo publish %s=%s" % (topic, payload))}
 
     def publish(topic, payload, retained=False):
@@ -581,6 +650,7 @@ def build_app(args, env=None):
         store, recorder, notifier, publish, load_admin_password(state_dir, env),
         bottle_names=lambda: read_bottle_names(find_hardware_db(env, state_dir)),
         admin_remote=env.get("HECTOR_ADMIN_REMOTE", "1").strip().lower() not in ("0", "false", "no", "off"),
+        state_dir=settings_dir, env=env,
         webui_dir=env.get("HECTOR_WEBUI_DIR") or next(
             (d for d in (os.path.join(os.path.dirname(REPO_DIR), "Hector9000WebUI"),
                          "/opt/hector9000/webui") if os.path.isdir(d)), None))
@@ -590,6 +660,7 @@ def build_app(args, env=None):
     app.watchdog = Watchdog(
         notifier.notify, notifier.resolve, wanted if wanted else None)
     app._publisher = publisher
+    app._demo_dir = demo_dir                  # keeps the demo's temporary folder alive
     return app
 
 

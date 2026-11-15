@@ -33,7 +33,7 @@ WebUI (Chromium-Kiosk, 800x480 Touch)  --MQTT/WebSocket 9001-->  Mosquitto  <--M
 | Kongress-Design, LED-Modi, Neustart/Vollbild verlassen | WebUI + Backend | `README.md` (beide Repos) |
 | LED-Animationen | `Hector9000/LEDStripServer.py`, `utils/LEDAnimations.py` | `README.md` |
 | **Statistik-Seite und Admin-Dashboard** | `Hector9000/StatsServer.py`, `utils/Stats*.py`, `web/` | [`stats.md`](stats.md) |
-| **Matrix-Chat-Bot** (Meldungen bei Fehlern, Vorbereitung) | `utils/Notifier.py`, `utils/Watchdog.py` | [`matrix.md`](matrix.md) |
+| **Matrix-Chat-Bot** (Meldungen bei Fehlern; Einrichtung im Dashboard-Reiter „Chat“) | `utils/Notifier.py`, `utils/NotifySettings.py`, `utils/Watchdog.py` | [`matrix.md`](matrix.md) |
 | **Ereignisse über MQTT** | `utils/Events.py`, `HectorController.py` | siehe unten |
 | **Doom-Osterei** (Cocktail „Doom“ starten) | WebUI `doom/`, `js/hector9000.js` | WebUI `doom/README.md` |
 | **Schlankes OS** (Raspberry Pi OS Lite, systemd, cage) | `deploy/` | [`../deploy/README.md`](../deploy/README.md), [`plans/2026-11-14-slim-os.md`](plans/2026-11-14-slim-os.md) |
@@ -161,8 +161,10 @@ das `pkill -f` des Kiosk-Skripts den Test selbst.
 6. `requirements.txt` und `setup.py` sind veraltet (siehe `deploy/requirements-bookworm.txt`); die WebUI-Klon-URL im
    Provisionierungsskript zeigt auf `koljasagorski/Hector9000WebUI`, Branch `feature/congress-design`. Ist das Repo privat,
    schlägt der Klon fehl.
-7. Matrix-Bot: Befehle aus dem Chat sind nur vorbereitet (`matrix.md`, Erweiterungspfad). Es gibt noch keinen Matrix-Zugang
-   und keinen echten Sendetest gegen einen Homeserver.
+7. Matrix-Bot: Die Einstellungen (Homeserver, Raum, Token, Stufe, Typ) und „Raum beitreten“ gibt es im Dashboard-Reiter
+   „Chat“, gespeichert in `notify.json` im Zustandsordner (Vorrang vor `hector.env`). Befehle aus dem Chat sind nur
+   vorbereitet (`matrix.md`, Erweiterungspfad). Es gibt noch keinen Matrix-Zugang und keinen echten Sendetest gegen einen
+   Homeserver (die Tests prüfen Anfrageform und Fehlerfälle mit einem Ersatz für das Netz).
 8. **Sicherheit, aus dem Review noch offen:** Das Admin-Dashboard läuft über Klartext-HTTP und ist standardmäßig aus dem
    Netz erreichbar (`HECTOR_ADMIN_REMOTE=0` + SSH-Tunnel oder TLS-Proxy davor). Statistikdienst, Chromium und Controller teilen
    sich im schlanken OS den Benutzer `hector` (Vorschlag: eigener Benutzer `hector-stats`, siehe `deploy/README.md`, Punkt 9).

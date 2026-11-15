@@ -14,8 +14,9 @@
 #     - resolve() sends a "wieder in Ordnung" note, but only for alerts that
 #       were really sent.
 #
-#   Matrix is switched on purely through the environment (secrets never go
-#   into the repository, see docs/matrix.md):
+#   Matrix is configured in the admin dashboard (stored in the state dir, see
+#   NotifySettings.py) or through the environment (secrets never go into the
+#   repository, see docs/matrix.md):
 #
 #     HECTOR_MATRIX_HOMESERVER   https://matrix.example.org
 #     HECTOR_MATRIX_ROOM         !roomid:example.org   (or the room's internal id)
@@ -56,6 +57,20 @@ class TemporaryError(Exception):
         self.retry_after = retry_after
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """The bot token travels in a header: never follow a redirect to some other host with it."""
+
+    def redirect_request(self, *args, **kwargs):
+        return None
+
+
+_OPENER = urllib.request.build_opener(_NoRedirect)
+
+
+def _open_no_redirect(req, timeout=10):
+    return _OPENER.open(req, timeout=timeout)
+
+
 class LogBackend:
     name = "log"
 
@@ -83,20 +98,14 @@ class MatrixBackend:
             raise ValueError("room and token are required")
         self.homeserver, self.room, self.token = homeserver, room, token
         self.timeout, self.msgtype = timeout, msgtype
-        self._open = opener or urllib.request.urlopen
+        self._open = opener or _open_no_redirect
 
     def url(self, txn):
         return "%s/_matrix/client/v3/rooms/%s/send/m.room.message/%s" % (
             self.homeserver, urllib.parse.quote(self.room, safe=""),
             urllib.parse.quote(txn, safe=""))
 
-    def send(self, text, level, txn):
-        body = json.dumps({"msgtype": self.msgtype, "body": text}).encode("utf-8")
-        req = urllib.request.Request(self.url(txn), data=body, method="PUT", headers={
-            "Authorization": "Bearer " + self.token,
-            "Content-Type": "application/json",
-            "User-Agent": "Hector9000-Notifier",
-        })
+    def _call(self, req, hint="Token/Raum prüfen"):
         try:
             with self._open(req, timeout=self.timeout) as resp:
                 resp.read(65536)
@@ -110,9 +119,24 @@ class MatrixBackend:
                 raise TemporaryError("Matrix: zu viele Anfragen", retry)
             if 500 <= e.code < 600:
                 raise TemporaryError("Matrix: Serverfehler %d" % e.code)
-            raise PermanentError("Matrix lehnt ab (HTTP %d) - Token/Raum prüfen" % e.code)
+            raise PermanentError("Matrix lehnt ab (HTTP %d) - %s" % (e.code, hint))
         except (urllib.error.URLError, OSError, TimeoutError) as e:
             raise TemporaryError("Matrix nicht erreichbar: %s" % getattr(e, "reason", e))
+
+    def _request(self, url, method, payload):
+        return urllib.request.Request(url, data=json.dumps(payload).encode("utf-8"), method=method, headers={
+            "Authorization": "Bearer " + self.token,
+            "Content-Type": "application/json",
+            "User-Agent": "Hector9000-Notifier",
+        })
+
+    def send(self, text, level, txn):
+        self._call(self._request(self.url(txn), "PUT", {"msgtype": self.msgtype, "body": text}))
+
+    def join(self):
+        """Accept the invitation to the room (an invited bot cannot post until it has joined)."""
+        url = "%s/_matrix/client/v3/join/%s" % (self.homeserver, urllib.parse.quote(self.room, safe=""))
+        self._call(self._request(url, "POST", {}), hint="wurde der Bot in den Raum eingeladen?")
 
 
 def backends_from_env(env=None):
@@ -149,6 +173,7 @@ class Notifier:
         self._lock = threading.RLock()
         self._wake = threading.Event()
         self._thread = None
+        self._want_thread = False
         self._counter = 0
 
     # ----------------------------------------------------------------- api --
@@ -253,11 +278,11 @@ class Notifier:
             for backend in [b for b in self.backends if b.name in item["pending"]]:
                 try:
                     backend.send(item["text"], item["level"], item["txn"])
-                    item["pending"].remove(backend.name)
+                    self._settle(item, backend.name)
                     self.stats["sent"] += 1
                     self.stats["last_ok"] = now
                 except PermanentError as e:
-                    item["pending"].remove(backend.name)
+                    self._settle(item, backend.name)
                     self.stats["failed"] += 1
                     self.stats["last_error"] = str(e)
                 except TemporaryError as e:
@@ -266,13 +291,20 @@ class Notifier:
                     item["next"] = now + wait
                     self.stats["last_error"] = str(e)
                 except Exception as e:           # a broken backend must not kill the worker
-                    item["pending"].remove(backend.name)
+                    self._settle(item, backend.name)
                     self.stats["failed"] += 1
                     self.stats["last_error"] = "%s: %s" % (backend.name, e)
             if not item["pending"]:
                 self._finish(item)
                 done += 1
         return done
+
+    def _settle(self, item, name):
+        """This backend is done with the message (sent or given up). Tolerant: reconfigure()
+        may have removed the backend while the worker was still sending."""
+        with self._lock:
+            if name in item["pending"]:
+                item["pending"].remove(name)
 
     def _finish(self, item, dropped=False):
         with self._lock:
@@ -282,10 +314,30 @@ class Notifier:
                 self.stats["dropped"] += 1
 
     def start(self):
-        if self._thread or not self.backends:
-            return
-        self._thread = threading.Thread(target=self._run, name="notifier", daemon=True)
-        self._thread.start()
+        self._want_thread = True
+        with self._lock:
+            if self._thread or not self.backends:
+                return
+            self._thread = threading.Thread(target=self._run, name="notifier", daemon=True)
+            self._thread.start()
+
+    def reconfigure(self, backends, min_level):
+        """Swap the backends and the minimum level while running (admin dashboard).
+
+        Queued messages for a backend that no longer exists are dropped; the others stay."""
+        with self._lock:
+            self.backends = list(backends or [])
+            self.min_level = LEVELS.get(min_level, 1)
+            names = {b.name for b in self.backends}
+            for item in list(self.queue):
+                item["pending"] = [n for n in item["pending"] if n in names]
+                if not item["pending"]:
+                    self.queue.remove(item)
+                    self.stats["dropped"] += 1
+            self.stats["last_error"] = None
+        if self._want_thread:
+            self.start()
+        self._wake.set()
 
     def _run(self):
         while True:

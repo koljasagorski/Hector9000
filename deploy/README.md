@@ -100,7 +100,7 @@ sudo /opt/hector9000/backend/deploy/migrate-data.sh import hector-data.tar.gz
 |---|---|
 | `HECTOR_STATE_DIR` | Ordner für Statistik, Tokens, Datenbanken des Stats-Servers (`/var/lib/hector9000`) |
 | `HECTOR_ADMIN_PASSWORD` | Passwort des Admin-Dashboards. Leer: der Stats-Server erzeugt beim ersten Start eines und legt es in `$HECTOR_STATE_DIR` ab |
-| `HECTOR_MATRIX_HOMESERVER`, `HECTOR_MATRIX_ROOM`, `HECTOR_MATRIX_TOKEN` | Matrix-Benachrichtigung bei Fehlern; leer = aus |
+| `HECTOR_MATRIX_HOMESERVER`, `HECTOR_MATRIX_ROOM`, `HECTOR_MATRIX_TOKEN` | Matrix-Benachrichtigung bei Fehlern; leer = aus. Auch im Admin-Dashboard (Reiter „Chat“) einstellbar; das dort Gespeicherte (`/var/lib/hector9000/notify.json`) hat Vorrang |
 
 Echte Werte gehören nur in diese Datei auf dem Pi, **nie** ins Repository (`hector.env.example` ist nur die Vorlage).
 Nach Änderungen: `sudo systemctl restart hector-stats`.
