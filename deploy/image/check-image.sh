@@ -22,9 +22,12 @@ warn() { WARNS=$((WARNS + 1)); printf '  \033[33mwarn\033[0m  %s\n' "$*"; }
 section() { printf '\n\033[1m%s\033[0m\n' "$*"; }
 check() { local what="$1"; shift; if "$@" >/dev/null 2>&1; then ok "$what"; else fail "$what"; fi; }
 
+# In a container /dev is a snapshot: loop devices created later have no node. Make plenty.
+for i in $(seq 0 63); do [ -e "/dev/loop$i" ] || mknod "/dev/loop$i" b 7 "$i" 2>/dev/null || true; done
+
 W="/mnt/hector-check"
 LOOPS=()
-cleanup() { set +e; umount -R -l "$W" 2>/dev/null; for l in "${LOOPS[@]:-}"; do [ -n "$l" ] && losetup -d "$l" 2>/dev/null; done; }
+cleanup() { set +e; umount -R "$W" 2>/dev/null || umount -R -l "$W" 2>/dev/null; for l in "${LOOPS[@]:-}"; do [ -n "$l" ] && losetup -d "$l" 2>/dev/null; done; }
 trap cleanup EXIT
 
 attach() { local l; l="$(losetup -f --show -r -o $(($2 * 512)) --sizelimit $(($3 * 512)) "$1")"; LOOPS+=("$l"); echo "$l"; }

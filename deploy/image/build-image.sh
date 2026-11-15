@@ -71,11 +71,15 @@ for tool in losetup sfdisk e2fsck resize2fs mkfs.ext4 mount git chroot fstrim; d
 done
 case "$ROOT_MIB$DATA_MIB" in *[!0-9]*) die "--root-mib/--data-mib must be numbers" ;; esac
 
+# In a container /dev is a snapshot: loop devices created later have no node. Make plenty.
+for i in $(seq 0 63); do [ -e "/dev/loop$i" ] || mknod "/dev/loop$i" b 7 "$i" 2>/dev/null || true; done
+
 LOOPS=()
 cleanup() {
     set +e
     if mountpoint -q "$MNT" 2>/dev/null || [ -d "$MNT/proc" ]; then
-        umount -R -l "$MNT" 2>/dev/null
+        # not lazy first: a lazily unmounted file system keeps its loop device busy
+        umount -R "$MNT" 2>/dev/null || umount -R -l "$MNT" 2>/dev/null
     fi
     for l in "${LOOPS[@]:-}"; do [ -n "$l" ] && losetup -d "$l" 2>/dev/null; done
 }
