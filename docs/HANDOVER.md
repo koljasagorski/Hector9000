@@ -133,6 +133,9 @@ nur im Container (`debian:bookworm`, arm64), als System des Images im Container 
   überlagert auch die Datenpartition; das Werkzeug schreibt deshalb `overlayroot=tmpfs:recurse=0`.
 * **Image bauen und prüfen:** [`../deploy/image/README.md`](../deploy/image/README.md): `build-image.sh`, `check-image.sh` (statisch), `boot-test.sh` (System im
   Container), `qemu-test.sh` (Boot mit Raspberry-Pi-Kernel in QEMU).
+* **Rename-Dialog der Basis abgeschaltet:** ohne `userconf.txt` blockiert `userconfig.service` (Dialog auf VT8) den Boot und verdeckt den Kiosk. Drop-in
+  `deploy/image/userconfig-hector.conf` (installiert von `provision.sh --image`); `hector-firstboot` macht nach der Imager-`custom.toml` das `getty@tty1` von
+  `cancel-rename` rückgängig (tty1 gehört dem Kiosk). Stand der Image-Tests: Container 66 ok, statisch 109 ok, QEMU 3 Phasen ok (54), siehe `deploy/image/README.md`.
 * **Sudo:** nur Neustart, Kiosk/Dienste neu starten, `date -u -s @<10 Ziffern>` (Uhr stellen über den Controller), Passwort anzeigen (als `hector-stats`),
   `hector-overlay status|on|off`. Ein Test (`tests/test_DeployLayout.py`) hält Skripte, Units, sudoers und Pfade im Gleichlauf.
 * **Restrisiko, bewusst nicht behoben:** MQTT hat keine Absender-Prüfung. Wer den Broker erreicht (im schlanken OS nur lokale Prozesse), kann „Uhr stellen“ mit

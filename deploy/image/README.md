@@ -26,6 +26,11 @@ Der Platzhalter-Benutzer `pi` aus der Basis bleibt **ohne Passwort** (gesperrt) 
 der UID 1000 beim Anpassen umbenennt. Der Dienstbenutzer `hector` hat bewusst eine andere UID. **Ohne Imager-Anpassung gibt es
 keinen Login** (kein Standardpasswort). Das Wartungsmenü auf tty1 braucht keinen Login: geheimer Button der Oberfläche (5× oben links), siehe `deploy/README.md`.
 
+**Kein Umbenennungs-Dialog.** Die Basis startet ohne `userconf.txt` einen interaktiven Dialog („Please enter new username“) auf VT8, schaltet die Konsole
+dorthin und erreicht `multi-user.target` nie. Am Touchscreen ohne Tastatur wäre der Hector damit nicht benutzbar (der Dialog verdeckt den Kiosk). Das Image
+schaltet das per Drop-in ab (`userconfig-hector.conf`): `userconfig.service` läuft nur, wenn `userconf` oder `userconf.txt` auf der Boot-Partition liegt
+(Format `name:passwort-hash`, dann ohne Dialog). Gefunden hat das der QEMU-Test; der Container-Test hatte den Dienst übersprungen.
+
 ## Welcher Pi?
 
 Das Image ist **arm64**: Pi 3, 3 B+, 3 A+, 4, 400, Zero 2 W, Compute Module 3/4 und Pi 2 **ab Revision 1.2** (BCM2837).
@@ -81,13 +86,21 @@ Hinweise aus der Praxis:
 |---|---|---|
 | `check-image.sh IMAGE` | **Statisch, ohne Boot:** Partitionstabelle (Disk-ID, Ausrichtung), `cmdline.txt` (keine `init=…/firstboot`, `root=PARTUUID` passt zur Disk-ID, kein `overlayroot`), `config.txt` (I²C, SPI), Kernel/initramfs vorhanden, **initramfs enthält** den `overlayroot`-Hook, `fsck` und das Overlay-Modul, fstab (PARTUUID, `nosuid,nodev,noexec,nofail`), Benutzer, Rechte, sudoers, Units gleich dem Repo, Pakete, Git-Klone, **Suche nach Geheimnissen** (private Schlüssel, Token-Muster, Passwörter in `hector.env`; ein frei wählbarer Zusatz-Suchausdruck lässt sich mit `HECTOR_CHECK_FORBIDDEN` übergeben) | 1 Minute |
 | `boot-test.sh all` | **Das System des Images läuft im Container** (eigenes systemd in einem chroot, Hardware-Server durch den Simulator ersetzt, `CAP_SYS_TIME` entzogen): Dienste und ihre Benutzer, MQTT nur auf `127.0.0.1`, Dashboard-Login (200/401), Datei- und Ordnerrechte, Mount-Optionen der Datenpartition, sudo-Regeln (erlaubt/verboten), Sandbox des Dashboards, `systemd-analyze verify`, MQTT-Rundlauf bis zum `sudo date`-Aufruf von „Uhr stellen“ | 2 Minuten |
-| `qemu-test.sh` | **Der Boot mit echtem Raspberry-Pi-Kernel und -initramfs** in QEMU (Pi 3B) auf einer 8-GiB-Karte: Root per PARTUUID, fstab-Mounts, `hector-firstboot` vergrößert die Datenpartition, Dienste; dann `hector-overlay on` → Neustart (Root ist ein Overlay, Daten bleiben) → `off` → Neustart | 15–30 Minuten (Software-Emulation) |
+| `qemu-test.sh` | **Der Boot mit echtem Raspberry-Pi-Kernel und -initramfs** in QEMU (Pi 3B) auf einer 8-GiB-Karte, mit einer `custom.toml` wie vom Imager: Root per PARTUUID, fstab-Mounts, `hector-firstboot` vergrößert die Datenpartition und wendet die `custom.toml` an (Benutzer umbenannt, Hostname, Datei gelöscht, kein Umbenennungs-Dialog, `getty@tty1` bleibt aus), Dienste; dann `hector-overlay on` → Neustart (Root ist ein Overlay, Daten bleiben) → `off` → Neustart | rund 3 Minuten (Software-Emulation, gemessen auf Apple Silicon) |
 
 `boot-test.sh` und `qemu-test.sh` arbeiten mit einem Image im Volume `hector-img-work` (Standardpfad `/work/out/hector9000-test.img`, anderer Pfad als Argument).
 `boot-test.sh prepare` entpackt dafür die Partitionen (rund 2,3 GB zusätzlich), `qemu-test.sh` legt eine 8-GiB-Kopie an (rund 2,3 GB auf der Platte).
 
+**Ergebnis des letzten Laufs** (Image aus Backend-Commit `57712c1`, WebUI `c830fc5`): `check-image.sh` 109 bestanden, 0 fehlgeschlagen (1 Hinweis: kein
+Zusatzmuster in `HECTOR_CHECK_FORBIDDEN`), `boot-test.sh all` 66 bestanden, 0 fehlgeschlagen, `qemu-test.sh` alle drei Phasen bestanden (33 + 14 + 7 Prüfungen).
+Ohne Hardware erwartet fehlgeschlagen sind im QEMU-Boot `hector-server`, `hector-led`, der Kiosk (kein Display) und `rpi-eeprom-update`.
+Der initramfs meldet „Warning: fsck not present, so skipping root file system“; das ist dort normal, die Prüfung übernimmt danach `systemd-fsck-root`
+(im Boot-Log zu sehen, ebenso `systemd-fsck@` für Boot- und Datenpartition; bei eingeschaltetem Schreibschutz wird das Root-Dateisystem nicht geprüft).
+
 **Was diese Tests nicht ersetzen:** Raspberry-Pi-Hardware (Ventile, Pumpe, HX711-Waage, PCA9685, WS2812-PWM auf GPIO 18, Touchscreen/GPU),
-Wi-Fi, Bluetooth, Timing und Speicherbedarf auf einem echten Pi, echte SD-Karten (Stromausfall, Verschleiß).
+Wi-Fi, Bluetooth, Timing und Speicherbedarf auf einem echten Pi, echte SD-Karten (Stromausfall, Verschleiß). Auch ungetestet: dass `cage` und Chromium auf dem
+Touchscreen starten (QEMU hat kein Display; der Kiosk wird dort nur gestartet und scheitert erwartungsgemäß) und der Imager selbst (die `custom.toml` im Test ist
+von Hand nach seinem Format geschrieben, ein echter Imager-Lauf fehlt).
 
 ## Wartung und Updates am laufenden Gerät
 

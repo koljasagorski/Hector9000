@@ -268,6 +268,12 @@ Chromium 156 und cage 0.1.4. `systemd-analyze verify` meldet für alle Units nic
 `RuntimeError: This module can only be run on a Raspberry Pi!` ab; `test_LEDAnimations` und `test_HectorSystem`:
 24 passed. Mit der alten `requirements.txt` scheitert `RPi.GPIO==0.7.0` beim Bauen unter Python 3.11.
 
+**Image** (`deploy/image/`, Backend-Commit `57712c1`): statische Prüfung des fertigen Images 109 bestanden / 0 fehlgeschlagen; das System des Images im Container
+(eigenes systemd, Simulator statt Hardware) 66 / 0; Boot mit dem Raspberry-Pi-Kernel in QEMU (Pi 3B, 8-GiB-Karte, `custom.toml` wie vom Imager) in drei Phasen
+(erster Start mit wachsender Datenpartition, Schreibschutz an, Schreibschutz aus) 54 / 0. Der QEMU-Test hat einen echten Fehler gefunden und er ist behoben: die Basis
+öffnete ohne `userconf.txt` einen Umbenennungs-Dialog auf VT8, der den Boot blockiert und den Kiosk verdeckt hätte (Drop-in `deploy/image/userconfig-hector.conf`).
+Einzelheiten und Grenzen: [`image/README.md`](image/README.md).
+
 **Nicht getestet (braucht Hardware oder ein echtes System):** `systemctl`-Verhalten im echten Betrieb
 (`OnSuccess`/`OnFailure`, `Conflicts` mit `getty@tty1`, PAM-Session), `cage` + Chromium auf dem Touchscreen,
 Hardwarezugriff (PCA9685, HX711, GPIO, WS2812-PWM), 32-Bit-ARM (armv7l, Pi 3 mit 32-Bit-Image),
