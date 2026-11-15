@@ -37,7 +37,8 @@ HECTOR_GROUPS=(gpio i2c spi video render input systemd-journal)
 # nothing of the hardware side except the (world-readable) recipe database.
 STATS_USER="hector-stats"
 PREFIX="/opt/hector9000"
-STATE_DIR="/var/lib/hector9000"            # hardware side: h9k.db (owner hector)
+STATE_DIR="/var/lib/hector9000"            # owner ROOT: mount point of the data partition
+HW_DIR="${STATE_DIR}/hector"               # hardware side: h9k.db (owner hector)
 STATS_DIR="${STATE_DIR}/stats"             # stats.db, admin password, notify.json (owner hector-stats)
 ETC_DIR="/etc/hector9000"
 
@@ -241,29 +242,41 @@ fi
 # --------------------------------------------------------------- 4. dirs
 log "Directories"
 run install -d -m 0755 "$PREFIX"
-# STATE_DIR belongs to the hector user (the one that talks to MQTT). Root must never follow a
-# link that this user could have planted there, so links are refused or skipped everywhere
-# below, and the one chmod on the hector-owned database runs as that user, not as root.
+# STATE_DIR belongs to ROOT; each service user owns only its own sub folder. That way neither
+# of them can rename or replace a folder (or plant a link) while root works below here, which
+# would let them steer root's chown/mv/cat to other files.
 [ ! -L "$STATE_DIR" ] || die "${STATE_DIR} is a symlink - refusing (changed by hand?)"
-[ ! -L "$STATS_DIR" ] || die "${STATS_DIR} is a symlink - refusing (changed by hand?)"
-# STATE_DIR is traversable (x) for others so that the statistics service can reach its own
-# subdirectory and read the recipe database; nobody but hector can list or write it.
-run install -d -m 0751 -o "$HECTOR_USER" -g "$HECTOR_USER" "$STATE_DIR"
+run install -d -m 0755 -o root -g root "$STATE_DIR"
+for d in "$HW_DIR" "$STATS_DIR"; do
+    [ ! -L "$d" ] || die "${d} is a symlink - refusing (changed by hand?)"
+done
+# hector/ is traversable (x) for others so that the statistics service can read the recipe
+# database (bottle names); nobody but hector can list or write it.
+run install -d -m 0751 -o "$HECTOR_USER" -g "$HECTOR_USER" "$HW_DIR"
 run install -d -m 0750 -o "$STATS_USER" -g "$STATS_USER" "$STATS_DIR"
-# before the statistics service had its own user, its files lived in STATE_DIR: move them
 if [ "$DRY_RUN" = 0 ]; then
+    # move_old SRC DST OWNER: rename a file/folder of an older layout into its new home.
+    # mv renames the entry itself (never what a link points to); links are skipped.
+    move_old() {
+        local src="$1" dst="$2" owner="$3"
+        if [ -L "$src" ]; then warn "ignoring ${src}: it is a symlink"; return 0; fi
+        [ -e "$src" ] || return 0
+        if [ -e "$dst" ] || [ -L "$dst" ]; then warn "${dst} exists, leaving ${src} where it is"; return 0; fi
+        info "move: ${src} -> ${dst}"
+        mv -n "$src" "$dst"
+        chown -h "$owner" "$dst"
+    }
+    # first layout: everything directly in STATE_DIR (owned by hector, services ran as hector)
     for f in stats.db stats.db-wal stats.db-shm admin_password notify.json; do
-        src="${STATE_DIR}/${f}"; dst="${STATS_DIR}/${f}"
-        if [ -L "$src" ]; then
-            warn "ignoring ${src}: it is a symlink"
-        elif [ -f "$src" ] && [ ! -e "$dst" ] && [ ! -L "$dst" ]; then
-            info "move: ${src} -> ${STATS_DIR}/"
-            mv -n "$src" "$dst"
-            chown -h "$STATS_USER:$STATS_USER" "$dst"
-        fi
+        move_old "${STATE_DIR}/${f}" "${STATS_DIR}/${f}" "${STATS_USER}:${STATS_USER}"
     done
-    # the recipe database may be read by the statistics service (bottle names)
-    for f in "${STATE_DIR}"/h9k.db*; do
+    for f in "${STATE_DIR}"/h9k.db* "${STATE_DIR}/migrated"; do
+        [ -e "$f" ] || [ -L "$f" ] || continue
+        move_old "$f" "${HW_DIR}/$(basename "$f")" "${HECTOR_USER}:${HECTOR_USER}"
+    done
+    # the recipe database may be read by the statistics service (bottle names). The owner does
+    # the chmod itself, so a link in its own folder cannot make root change anything else.
+    for f in "${HW_DIR}"/h9k.db*; do
         [ -f "$f" ] && [ ! -L "$f" ] || continue
         runuser -u "$HECTOR_USER" -- chmod o+r "$f" || warn "could not make ${f} readable"
     done
@@ -326,6 +339,18 @@ fi
 log "Install files"
 install_file "${DEPLOY}/hector-maint"         /usr/local/bin/hector-maint         0755 || true
 install_file "${DEPLOY}/hector-kiosk-session" /usr/local/bin/hector-kiosk-session 0755 || true
+install_file "${DEPLOY}/hector-overlay"       /usr/local/sbin/hector-overlay      0755 || true
+
+# the journal may not grow without limit on a small card
+run mkdir -p /etc/systemd/journald.conf.d
+if [ "$DRY_RUN" = 0 ]; then
+    printf '[Journal]\nSystemMaxUse=50M\nRuntimeMaxUse=30M\n' > /etc/systemd/journald.conf.d/hector9000.conf
+fi
+
+if [ "$IMAGE" = 1 ]; then
+    install_file "${DEPLOY}/image/hector-firstboot"         /usr/local/sbin/hector-firstboot              0755 || true
+    install_file "${DEPLOY}/image/hector-firstboot.service" /etc/systemd/system/hector-firstboot.service 0644 || true
+fi
 
 for unit in "${DEPLOY}"/systemd/*.service "${DEPLOY}"/systemd/*.target; do
     install_file "$unit" "/etc/systemd/system/$(basename "$unit")" 0644 || true
@@ -349,15 +374,18 @@ fi
 # ---------------------------------------------------------- 7. services
 if [ "$USE_SYSTEMD" = 1 ]; then
     log "Services"
-    run systemctl daemon-reload
+    if [ "$IMAGE" = 0 ]; then run systemctl daemon-reload; fi
     run systemctl enable mosquitto.service
     run systemctl enable hector.target hector-server.service hector-controller.service \
         hector-led.service hector-stats.service hector-kiosk.service
-    if [ "$CHANGED_MOSQUITTO" = 1 ]; then
+    if [ "$IMAGE" = 1 ]; then run systemctl enable hector-firstboot.service; fi
+    if [ "$IMAGE" = 1 ]; then
+        info "image build: nothing is started or restarted"
+    elif [ "$CHANGED_MOSQUITTO" = 1 ]; then
         info "mosquitto config changed, restarting broker"
         run systemctl restart mosquitto.service
     fi
-    if [ "$START" = 1 ]; then
+    if [ "$START" = 1 ] && [ "$IMAGE" = 0 ]; then
         info "starting hector.target (the kiosk takes over tty1)"
         run systemctl restart hector.target
     else
@@ -374,12 +402,8 @@ if [ "$OVERLAYFS" = 1 ]; then
         die "$STATE_DIR is not a separate partition. With a read-only root the databases would
        be lost at every reboot. Create a data partition and mount it there first (deploy/README.md)."
     fi
-    if command -v raspi-config >/dev/null 2>&1; then
-        run raspi-config nonint enable_overlayfs
-        info "takes effect after the next reboot. Undo with: raspi-config nonint disable_overlayfs"
-    else
-        warn "raspi-config not found - enable the overlay manually (Performance Options)"
-    fi
+    run /usr/local/sbin/hector-overlay on
+    info "takes effect after the next reboot. Undo with: sudo hector-overlay off"
 fi
 
 log "Done"

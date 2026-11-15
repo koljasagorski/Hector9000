@@ -9,6 +9,7 @@
 #   hector-maint --ips       print IP addresses
 #   hector-maint --status    print service states
 #   hector-maint --password  print the admin dashboard password
+#   hector-maint --overlay   print the state of the read-only root (overlay)
 #
 set -u
 
@@ -73,6 +74,25 @@ password() {
     fi
 }
 
+overlay() {
+    $SUDO /usr/local/sbin/hector-overlay status 2>&1 || echo "(Status nicht lesbar)"
+}
+
+overlay_menu() {
+    overlay
+    echo
+    echo "Mit Schreibschutz übersteht das System ein Ziehen des Steckers. Änderungen am System"
+    echo "(z. B. /etc/hector9000/hector.env, WLAN) gehen dann beim Neustart verloren: vorher"
+    echo "ausschalten, ändern, wieder einschalten. Rezepte und Statistik bleiben immer erhalten."
+    echo
+    read -rsn1 -p "1 = einschalten, 2 = ausschalten, sonst zurück > " c
+    echo
+    case "$c" in
+        1) $SUDO /usr/local/sbin/hector-overlay on ;;
+        2) $SUDO /usr/local/sbin/hector-overlay off ;;
+    esac
+}
+
 pause() {
     echo
     read -rsn1 -p "[Taste drücken]" _
@@ -93,6 +113,7 @@ menu() {
         echo "  5) Hector-Dienste neu starten"
         echo "  6) Neustart"
         echo "  7) Admin-Passwort anzeigen"
+        echo "  8) Schreibschutz (Overlay) an/aus"
         echo
         echo "  Konsole mit Login: USB-Tastatur Strg+Alt+F2"
         echo
@@ -126,6 +147,7 @@ menu() {
                 fi
                 ;;
             7) password; pause ;;
+            8) overlay_menu; pause ;;
         esac
     done
 }
@@ -134,6 +156,7 @@ case "${1:-}" in
     --ips) ips ;;
     --status) status ;;
     --password) password ;;
+    --overlay) overlay ;;
     "") menu ;;
-    *) echo "usage: hector-maint [--ips|--status|--password]" >&2; exit 2 ;;
+    *) echo "usage: hector-maint [--ips|--status|--password|--overlay]" >&2; exit 2 ;;
 esac

@@ -3,14 +3,16 @@ Description=Hector9000 controller (drinks, recipes, system actions)
 Documentation=file:///opt/hector9000/backend/deploy/README.md
 After=mosquitto.service hector-server.service
 Wants=mosquitto.service hector-server.service
+# the data partition must be mounted: otherwise the database would end up on the (possibly
+# read-only or volatile) root file system
+RequiresMountsFor=/var/lib/hector9000
 PartOf=hector.target
 
 [Service]
 Type=simple
 User=hector
 Group=hector
-WorkingDirectory=/var/lib/hector9000
-StateDirectory=hector9000
+WorkingDirectory=/var/lib/hector9000/hector
 Environment=PYTHONPATH=/opt/hector9000/backend
 Environment=PYTHONUNBUFFERED=1
 # no hector.env: it holds the admin password and the Matrix token, only hector-stats.service needs them

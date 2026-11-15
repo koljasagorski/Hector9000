@@ -1,0 +1,104 @@
+#!/usr/bin/env bash
+#
+# Read-only root file system ("overlay") for Hector9000 - protects the system partition
+# against a pulled plug. Installed to /usr/local/sbin.
+#
+#   sudo hector-overlay status
+#   sudo hector-overlay on      switch on  (takes effect after the next reboot)
+#   sudo hector-overlay off     switch off (takes effect after the next reboot)
+#
+# What it does: with the overlay, the system partition is mounted read-only and every change
+# lands in RAM (tmpfs) and is gone after a reboot. Only the data partition HECTORDATA
+# (/var/lib/hector9000: recipes, statistics, admin password, Matrix settings) stays writable.
+#
+# Why not "raspi-config nonint enable_overlayfs": it writes "overlayroot=tmpfs". The package
+# "overlayroot" treats that as recurse=1 and lays the overlay over EVERY file system in
+# /etc/fstab, the data partition included - the data would then be lost at every reboot.
+# This script always writes "overlayroot=tmpfs:recurse=0" (only "/" is overlaid).
+#
+# With the overlay on, the following is lost at the next reboot (so switch it off first,
+# make the change, switch it on again): edits in /etc (hector.env, Wi-Fi), apt, git pull.
+#
+set -euo pipefail
+
+DATA_DIR="/var/lib/hector9000"
+CMDLINE="/boot/firmware/cmdline.txt"
+[ -f "$CMDLINE" ] || CMDLINE="/boot/cmdline.txt"
+PARAM="overlayroot=tmpfs:recurse=0"
+
+die() { echo "FEHLER: $*" >&2; exit 1; }
+
+running() { grep -q 'overlayroot=' /proc/cmdline && findmnt -no FSTYPE / | grep -q overlay; }
+configured() { grep -q 'overlayroot=' "$CMDLINE" 2>/dev/null; }
+
+status() {
+    if running; then echo "Schreibschutz: AN (läuft jetzt; Änderungen am System gehen beim Neustart verloren)"
+    else echo "Schreibschutz: aus (läuft jetzt nicht)"; fi
+    if configured; then
+        if grep -q "$PARAM" "$CMDLINE"; then echo "Eingestellt für den nächsten Start: AN"
+        else echo "Eingestellt für den nächsten Start: AN, aber mit falschem Parameter (mit 'on' korrigieren)"; fi
+    else
+        echo "Eingestellt für den nächsten Start: aus"
+    fi
+    if mountpoint -q "$DATA_DIR"; then
+        echo "Datenpartition: $(findmnt -no SOURCE "$DATA_DIR") -> $DATA_DIR ($(findmnt -no OPTIONS "$DATA_DIR" | cut -d, -f1))"
+    else
+        echo "Datenpartition: NICHT eingebunden ($DATA_DIR)"
+    fi
+}
+
+need_root() { [ "$(id -u)" -eq 0 ] || die "als root ausführen (sudo hector-overlay ...)"; }
+
+write_cmdline() {   # write_cmdline NEW_LINE: keep a copy, replace atomically on the same file system
+    local new="$1" tmp
+    [ -f "${CMDLINE}.before-overlay" ] || cp -p "$CMDLINE" "${CMDLINE}.before-overlay"
+    tmp="$(mktemp "${CMDLINE}.XXXXXX")"
+    printf '%s\n' "$new" > "$tmp"
+    sync "$tmp" 2>/dev/null || sync
+    mv -f "$tmp" "$CMDLINE"
+}
+
+check_prerequisites() {
+    [ -f "$CMDLINE" ] || die "$CMDLINE nicht gefunden - ist das ein Raspberry Pi?"
+    mountpoint -q "$DATA_DIR" || die "$DATA_DIR ist keine eigene Partition. Ohne Datenpartition gingen Rezepte und Statistik bei jedem Neustart verloren."
+    local data_dev root_dev
+    data_dev="$(findmnt -no SOURCE "$DATA_DIR")"
+    root_dev="$(findmnt -no SOURCE / | sed 's/\[.*//')"
+    [ "$data_dev" != "$root_dev" ] || die "$DATA_DIR liegt auf derselben Partition wie das System"
+    findmnt -no OPTIONS "$DATA_DIR" | tr ',' '\n' | grep -qx rw || die "die Datenpartition ist schreibgeschützt eingebunden"
+    grep -qs "^[^#]*[[:space:]]${DATA_DIR}[[:space:]]" /etc/fstab || die "$DATA_DIR steht nicht in /etc/fstab - nach dem Neustart wäre die Datenpartition nicht eingebunden"
+    [ "$(awk '/MemTotal/ {print $2; exit}' /proc/meminfo)" -gt 400000 ] || die "zu wenig Arbeitsspeicher für den Schreibschutz (mindestens 512 MB)"
+    dpkg -s overlayroot >/dev/null 2>&1 || {
+        echo "Das Paket overlayroot fehlt, installiere es (braucht Internet) ..."
+        DEBIAN_FRONTEND=noninteractive apt-get install -y overlayroot || die "overlayroot konnte nicht installiert werden"
+    }
+}
+
+turn_on() {
+    need_root
+    check_prerequisites
+    local line new
+    line="$(tr -d '\n' < "$CMDLINE")"
+    # drop any earlier overlayroot= word (also raspi-config's "overlayroot=tmpfs"), then put ours first
+    new="$(printf '%s' "$line" | sed -E 's/(^| )overlayroot=[^ ]*//g; s/^ +//')"
+    write_cmdline "$PARAM $new"
+    echo "Schreibschutz ist für den nächsten Start EINGESTELLT. Neustart nötig: sudo systemctl reboot"
+    echo "Rückgängig: sudo hector-overlay off   (oder am PC in cmdline.txt das Wort $PARAM löschen)"
+}
+
+turn_off() {
+    need_root
+    [ -f "$CMDLINE" ] || die "$CMDLINE nicht gefunden"
+    local line new
+    line="$(tr -d '\n' < "$CMDLINE")"
+    new="$(printf '%s' "$line" | sed -E 's/(^| )overlayroot=[^ ]*//g; s/^ +//')"
+    write_cmdline "$new"
+    echo "Schreibschutz ist für den nächsten Start AUSGESCHALTET. Neustart nötig: sudo systemctl reboot"
+}
+
+case "${1:-}" in
+    status) status ;;
+    on)     turn_on ;;
+    off)    turn_off ;;
+    *)      echo "usage: hector-overlay status|on|off" >&2; exit 2 ;;
+esac

@@ -30,5 +30,12 @@ Cmnd_Alias HECTOR_CLOCK = \
 Cmnd_Alias HECTOR_SHOWPW = \
     /usr/bin/cat /var/lib/hector9000/stats/admin_password
 
-hector ALL=(root) NOPASSWD: HECTOR_CTL, HECTOR_CLOCK
+# Maintenance menu: switch the read-only root (overlay) on/off. The script only edits
+# cmdline.txt on the boot partition (and installs the package "overlayroot" if it is missing).
+Cmnd_Alias HECTOR_OVERLAY = \
+    /usr/local/sbin/hector-overlay status, \
+    /usr/local/sbin/hector-overlay on, \
+    /usr/local/sbin/hector-overlay off
+
+hector ALL=(root) NOPASSWD: HECTOR_CTL, HECTOR_CLOCK, HECTOR_OVERLAY
 hector ALL=(hector-stats) NOPASSWD: HECTOR_SHOWPW

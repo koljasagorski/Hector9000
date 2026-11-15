@@ -152,6 +152,7 @@ def test_sudoers_gives_root_nothing_but_the_fixed_commands():
 
 def test_provision_never_lets_root_follow_links_in_the_hector_owned_state_dir():
     text = open(os.path.join(os.path.dirname(__file__), "..", "deploy", "provision.sh")).read()
-    assert 'die "${STATE_DIR} is a symlink' in text and 'die "${STATS_DIR} is a symlink' in text
-    assert 'chown -h "$STATS_USER:$STATS_USER"' in text
+    assert 'die "${STATE_DIR} is a symlink' in text and 'die "${d} is a symlink' in text
+    assert 'install -d -m 0755 -o root -g root "$STATE_DIR"' in text           # the parent is root's, not a service user's
+    assert 'chown -h "$owner" "$dst"' in text and 'mv -n "$src" "$dst"' in text
     assert 'runuser -u "$HECTOR_USER" -- chmod o+r' in text

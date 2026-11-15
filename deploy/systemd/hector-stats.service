@@ -20,7 +20,7 @@ Environment=PYTHONPATH=/opt/hector9000/backend
 Environment=PYTHONUNBUFFERED=1
 Environment=HECTOR_STATE_DIR=/var/lib/hector9000/stats
 # the hardware database is only read (bottle names)
-Environment=HECTOR_DB=/var/lib/hector9000/h9k.db
+Environment=HECTOR_DB=/var/lib/hector9000/hector/h9k.db
 # values in hector.env (admin password, Matrix) override the lines above
 EnvironmentFile=-/etc/hector9000/hector.env
 ExecStart=/opt/hector9000/venv/bin/python Hector9000/StatsServer.py

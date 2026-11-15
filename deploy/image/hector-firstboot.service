@@ -1,0 +1,14 @@
+[Unit]
+Description=Hector9000 first boot (grow the data partition, Imager customisation)
+Documentation=file:///opt/hector9000/backend/deploy/image/README.md
+After=local-fs.target
+Before=NetworkManager.service ssh.service hector-server.service hector-controller.service hector-stats.service
+ConditionPathExists=!/etc/hector9000/firstboot.done
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/hector-firstboot
+
+[Install]
+WantedBy=multi-user.target

@@ -11,13 +11,14 @@
 # in conf/drinks.py), the list of untracked files and the git revision.
 # Contains no passwords or keys; still treat the archive as private.
 #
-# import puts the databases into /var/lib/hector9000 (existing ones are saved
+# import puts the databases into /var/lib/hector9000/hector (existing ones are saved
 # as *.bak-<time>) and unpacks the code changes to
-# /var/lib/hector9000/migrated/ for REVIEW. It never edits the checkout.
+# /var/lib/hector9000/hector/migrated/ for REVIEW. It never edits the checkout.
 #
 set -euo pipefail
 
-STATE_DIR="/var/lib/hector9000"
+ROOT_DIR="/var/lib/hector9000"            # belongs to root (mount point of the data partition)
+STATE_DIR="${ROOT_DIR}/hector"            # h9k.db: owned by the hardware services user
 HECTOR_USER="hector"
 
 die() { echo "ERROR: $*" >&2; exit 1; }
@@ -91,6 +92,8 @@ cmd_import() {
     if pgrep -u "$HECTOR_USER" >/dev/null 2>&1; then
         die "processes are still running as $HECTOR_USER ($(pgrep -u "$HECTOR_USER" -l | head -c 200 | tr '\n' ' ')) - stop them (pkill -u $HECTOR_USER) and run again"
     fi
+    [ ! -L "$ROOT_DIR" ] && [ ! -L "$STATE_DIR" ] || die "$ROOT_DIR or $STATE_DIR is a symbolic link - refusing"
+    install -d -m 0755 -o root -g root "$ROOT_DIR"
     install -d -m 0751 -o "$HECTOR_USER" -g "$HECTOR_USER" "$STATE_DIR"
     # $STATE_DIR belongs to the service user, but this script writes there as root. A symbolic
     # link planted by that user would redirect root's writes (backup copies) to any file.
