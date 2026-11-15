@@ -161,6 +161,21 @@ Note: the broker allows anonymous access, so anyone who can reach it on the
 network can trigger these actions (as they already can trigger dosing).
 
 
+Statistics page, admin dashboard, chat alerts (fork additions)
+---
+
+`Hector9000/StatsServer.py` records every dose and error from MQTT into SQLite and serves
+
+* a **public statistics page** on `http://<hector>:8080/` (counters, records, charts, live view; read only, no error texts),
+* a **password-protected admin dashboard** on `/admin` (health, bottles, errors, CSV export, safe maintenance actions
+  such as clean, dry, refill, reboot; dangerous ones are refused while a drink is being poured).
+
+A watchdog reports problems (service offline, errors, low bottles) through a notifier; the first backend is a
+**Matrix chat bot** (optional, off by default). Details: [`docs/stats.md`](docs/stats.md), [`docs/matrix.md`](docs/matrix.md).
+The cocktail **"Doom"** in the WebUI starts Doom (WebAssembly, free Freedoom levels); see the
+[WebUI repository](https://github.com/koljasagorski/Hector9000WebUI). A lean Raspberry Pi OS Lite setup with systemd units
+lives in [`deploy/`](deploy/README.md). Current state, update procedure and open points: [`docs/HANDOVER.md`](docs/HANDOVER.md).
+
 ## Info 
 
 If you have some ideas or a fix or something else to make 
