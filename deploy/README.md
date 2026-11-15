@@ -37,8 +37,15 @@ ist durch ein Passwort geschützt (`HECTOR_ADMIN_PASSWORD`, siehe unten).
 
 ### 1. Karte flashen
 
-Raspberry Pi Imager → **Raspberry Pi OS Lite (64-bit)** (bookworm). 32-Bit geht
+Raspberry Pi Imager → **Raspberry Pi OS Lite (64-bit)**, **Debian 12 „bookworm“**. 32-Bit geht
 auch (Skripte und Paketnamen sind gleich), ist aber ungetestet.
+
+> **Achtung, Version:** Der Imager schlägt seit Herbst 2025 **Debian 13 „Trixie“** vor. Die Skripte und `requirements-bookworm.txt`
+> sind für bookworm geschrieben und nur dort (im Container) geprüft; `provision.sh` warnt bei jeder anderen Version.
+> Bookworm gibt es weiterhin als „Raspberry Pi OS (Legacy)“ (Imager: *Raspberry Pi OS (other)*, oder von der Download-Seite von
+> raspberrypi.com). Trixie bringt Python 3.13 mit; ob die alten Hardware-Pakete (RPi.GPIO, HX711, Adafruit-PCA9685) dort
+> laufen, ist offen (Spike, Schritt 3 im Plan). Welche Pi-Version steckt im Hector? 64-Bit gibt es nur ab Pi 3 (und Pi 2 v1.2),
+> ältere brauchen die 32-Bit-Variante.
 In den Imager-Einstellungen: Hostname (z. B. `hector`), einen eigenen Admin-Benutzer
 mit Passwort (**nicht** `hector`, den legt das Skript selbst an), WLAN, SSH.
 
