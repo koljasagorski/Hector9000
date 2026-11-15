@@ -82,12 +82,24 @@ Der Pi war nicht verlässlich per SSH erreichbar, deshalb läuft das Update **ei
    `VERSION` läuft nie zweimal (`/var/lib/hector-update.done`).
 5. Karte zurück in den Pi. Danach `update.log` prüfen.
 
-Läufe bisher: **Lauf 1** (Kongress-UI, Kiosk-Autostart) erfolgreich. **Lauf 2** (LED-Animationen) war scharf gesetzt,
+Läufe bisher: **Lauf 1** (Kongress-UI, Kiosk-Autostart) erfolgreich. **Lauf 2** (LED-Animationen) war scharf gesetzt;
 sein Ergebnis steht im `update.log` auf der Karte und ist noch nicht ausgewertet. **Lauf 3** (Doom, Statistik,
-Ereignisse, `kiosk.sh` mit lokalem HTTP-Server) ist vorbereitet, aber noch nicht ausgeführt: `run.sh` muss dafür
-eine eigene `hector9000-stats.service` anlegen (Arbeitsverzeichnis = Repo, `HECTOR_DB=./h9k.db`,
-`HECTOR_STATE_DIR=/var/lib/hector9000`, Benutzer `pi`) und der freie Platz der Boot-Partition reicht für
-Freedoom-WAD (29 MB), Wasm und Bundles prüfen. Hinweis: Die Karte wurde zeitweise an einem anderen PC bearbeitet.
+Ereignisse, `kiosk.sh` mit lokalem HTTP-Server) ist gebaut und im Container (Debian Bullseye, Python 3.9) als Kette
+Lauf 2 → Lauf 3 geprüft, aber noch nicht auf dem echten Pi ausgeführt. Was Lauf 3 zusätzlich zu den Repos tut
+(Abschnitt 7 in `run.sh`):
+
+* legt `/var/lib/hector9000` an und eine **eigene** Unit `hector9000-stats.service` (Benutzer = Besitzer des Repos,
+  Port 8080, `HECTOR_DB=<Repo>/h9k.db`); `start.sh` wird nicht angefasst;
+* setzt `HECTOR_EXPECT_PROCESSES` je nach `start.sh` (ist der LED-Server dort auskommentiert, erwartet der Wächter nur
+  `server,controller`);
+* erzeugt das Admin-Passwort und legt eine Kopie als `hector-update/admin-password.txt` auf die Boot-Partition, damit
+  man es ohne SSH lesen kann. **Die Datei nach dem Lesen löschen** (die FAT-Partition ist für jeden lesbar, der die Karte
+  hat); im `update.log` steht das Passwort nicht. Auf dem Pi liegt es in `/var/lib/hector9000/admin_password` (0600);
+* braucht etwa 15 MB (Bundles) plus den Platz im Repo (Freedoom-WAD 29 MB, Wasm); die Boot-Partition muss die Bundles
+  fassen, die Repos liegen auf der Root-Partition.
+
+Nach dem Boot: `http://<ip>:8080/` (öffentlich) und `http://<ip>:8080/admin` (Login `admin`). Der Cocktail „Doom“ ist
+im WebUI immer da (virtueller Eintrag, falls das Backend keinen liefert).
 
 Das **schlanke OS** ist der andere Weg (frisch flashen, `deploy/provision.sh`). Es ist bisher nur im Container
 (`debian:bookworm`, arm64) getestet, nicht auf echter Hardware.
