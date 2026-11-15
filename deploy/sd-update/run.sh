@@ -300,6 +300,44 @@ UNIT
     echo "disable again: sudo systemctl disable --now hector9000-stats.service"
 fi
 
+# --- 8. close the MQTT ports to the network (mosquitto itself stays untouched) --------------
+# Everything of Hector talks to "localhost", but mosquitto listens on all interfaces and accepts
+# anonymous clients. A small firewall unit lets only loopback traffic reach 1883/9001.
+if [ -f "$DIR/mqtt-guard.sh" ]; then
+    section "mqtt guard"
+    install -D -m 0755 -o root -g root "$DIR/mqtt-guard.sh" /usr/local/sbin/hector9000-mqtt-guard
+    if command -v nft >/dev/null 2>&1; then
+        echo "firewall tool: nftables ($(command -v nft))"
+    elif command -v iptables >/dev/null 2>&1; then
+        echo "firewall tool: iptables ($(command -v iptables))"
+    else
+        echo "WARNING: neither nft nor iptables found - the MQTT ports stay open until one of them is installed (sudo apt install nftables, then reboot or: sudo systemctl restart hector9000-mqtt-guard)"
+    fi
+    cat > /etc/systemd/system/hector9000-mqtt-guard.service <<UNIT
+[Unit]
+Description=Hector9000: close MQTT ports 1883/9001 to the network
+DefaultDependencies=no
+After=local-fs.target
+Wants=network-pre.target
+Before=network-pre.target mosquitto.service shutdown.target
+Conflicts=shutdown.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/hector9000-mqtt-guard start
+ExecStop=/usr/local/sbin/hector9000-mqtt-guard stop
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+    mkdir -p /etc/systemd/system/multi-user.target.wants
+    ln -sf /etc/systemd/system/hector9000-mqtt-guard.service /etc/systemd/system/multi-user.target.wants/hector9000-mqtt-guard.service
+    echo "created + enabled /etc/systemd/system/hector9000-mqtt-guard.service, active from the next boot"
+    echo "check afterwards: sudo hector9000-mqtt-guard status   (the admin dashboard shows it, too)"
+    echo "disable again: sudo systemctl disable --now hector9000-mqtt-guard.service"
+fi
+
 section "result"
 echo "backend updated: $BACKEND_OK   webui updated: $WEBUI_OK"
 echo "$STAMP version=$VERSION backend=$BACKEND_OK webui=$WEBUI_OK" > "$DONE"

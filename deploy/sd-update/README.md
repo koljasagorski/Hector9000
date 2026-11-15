@@ -35,6 +35,13 @@ nächsten Boot** von der SD-Karte: Die FAT-Boot-Partition kann jeder Rechner les
   `server,controller`) und erzeugt das Admin-Passwort. Eine Kopie landet als `hector-update/admin-password.txt` auf der
   Karte, damit man es ohne SSH lesen kann; im `update.log` steht es nicht. Die FAT-Partition ist für jeden lesbar, der die
   Karte hat: Datei nach dem Lesen löschen.
+* **Abschnitt 8:** installiert `mqtt-guard.sh` als `/usr/local/sbin/hector9000-mqtt-guard` und die Unit
+  `hector9000-mqtt-guard.service` (läuft vor dem Netzwerk und vor Mosquitto). Sie lässt auf den Ports 1883 und 9001 nur
+  Verbindungen über `lo` durch (alle Hector-Programme sprechen mit `localhost`) und verwirft den Rest. Genutzt wird
+  `nft`, sonst `iptables`/`ip6tables`; fehlt beides, steht im `update.log` eine Warnung und die Ports bleiben offen.
+  Mosquitto selbst wird nicht angefasst. Wirksam ab dem nächsten Boot; Prüfen: `sudo hector9000-mqtt-guard status`
+  (das Admin-Dashboard zeigt es im Reiter „System“ ebenfalls an). Die Sperre gilt nur für das Netzwerk: wer
+  den Broker von einem anderen Rechner aus nutzen will (z. B. MQTT Explorer), muss sie vorher abschalten.
 * Schreibt alles nach `hector-update/update.log` und merkt sich die `VERSION` in `/var/lib/hector-update.done`.
 
 ## Rückweg
@@ -48,3 +55,8 @@ Im Container (`debian:bullseye`, Python 3.9.2) als Kette „Lauf 2 → Lauf 3“
 Änderungen: Repos aktualisiert, lokale Änderungen erhalten, Unit und Passwortdatei angelegt (Passwort nicht im Log),
 Statistikdienst startet als Benutzer `pi` (Login 401/200), zweiter Lauf wirkungslos. **Auf dem echten Pi noch nicht
 ausgeführt.**
+Der Wächter ist separat getestet (`deploy/sd-update/test-mqtt-guard.sh`): zwei Docker-Container auf `debian:bullseye`,
+einmal mit `nft`, einmal mit `iptables`. Von außen sind 1883/9001 danach gesperrt, 8080 bleibt offen, `localhost` und die
+eigene LAN-Adresse funktionieren, doppeltes Starten legt keine Regeln doppelt an, `stop` hebt die Sperre auf, ohne
+Werkzeug gibt es eine Warnung mit Exit-Code 1. IPv6 und die Reihenfolge beim Booten (Unit vor Mosquitto) sind nicht
+getestet.

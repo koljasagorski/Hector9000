@@ -40,6 +40,7 @@ check "$WEBUI" "$WEBUI_BRANCH"
 
 mkdir -p "$OUT/hector-update"
 cp "$HERE/run.sh" "$OUT/hector-update/run.sh"
+cp "$HERE/mqtt-guard.sh" "$OUT/hector-update/mqtt-guard.sh"
 git -C "$BACKEND" bundle create "$OUT/hector-update/Hector9000.bundle" "$BACKEND_BRANCH" >/dev/null 2>&1
 git -C "$WEBUI" bundle create "$OUT/hector-update/Hector9000WebUI.bundle" "$WEBUI_BRANCH" >/dev/null 2>&1
 printf 'backend-%s-webui-%s' "$(git -C "$BACKEND" rev-parse --short "$BACKEND_BRANCH")" \

@@ -66,7 +66,8 @@ jobs:
         run: |
           shellcheck -S warning -x deploy/provision.sh deploy/hector-maint deploy/hector-overlay \
             deploy/hector-kiosk-session deploy/migrate-data.sh deploy/image/build-image.sh \
-            deploy/image/hector-firstboot deploy/sd-update/build-payload.sh
+            deploy/image/hector-firstboot deploy/sd-update/build-payload.sh \
+            deploy/sd-update/mqtt-guard.sh deploy/sd-update/test-mqtt-guard.sh
           # run.sh is the tested updater of the old Pi: only real errors, no style changes
           shellcheck -S warning -e SC2044,SC2155 deploy/sd-update/run.sh
       - name: sudoers syntax
