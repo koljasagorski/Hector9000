@@ -72,6 +72,7 @@ STATS_CACHE_S = 5
 LOGIN_FAILS = 5              # per minute and address, then 429
 GLOBAL_LOGIN_FAILS = 20      # per minute over all addresses, then 429 for strangers
 TRUST_S = 3600               # an address that logged in successfully is exempt from the global limit this long
+MQTT_CHECK_S = 300          # how often to look whether the MQTT broker answers on the LAN address
 MAX_CONNECTIONS = 32         # simultaneous HTTP requests, more get a 503
 REQUEST_DEADLINE = 30        # seconds for one whole request, however slowly it is sent
 MIN_PASSWORD_LENGTH = 12
@@ -195,6 +196,8 @@ class StatsApp:
         self.admin_remote = admin_remote      # False: /admin and /api/admin only from this machine
         self.processes = None
         self.synced = None
+        self.mqtt_exposed = None          # None = not checked, [] = only local, [ports] = reachable from the network
+        self._mqtt_checked = 0.0
         self.last_health = {}
         self.expected_processes = None
         self.watchdog = None
@@ -304,6 +307,7 @@ class StatsApp:
             "processes": self.processes,
             "health": dict(h, throttle_reasons=SystemHealth.throttle_reasons(h.get("throttled"))),
             "ips": SystemHealth.ip_addresses(),
+            "mqtt_exposed": self.mqtt_exposed,
             "versions": {"backend": SystemHealth.git_revision(self.backend_dir),
                          "webui": SystemHealth.git_revision(self.webui_dir)},
             "clock": {"server_time": now, "synced": self.synced},
@@ -524,6 +528,9 @@ class StatsApp:
         self.last_health = h
         self.synced = SystemHealth.clock_synced()
         self.processes = SystemHealth.running_processes() if self.expected_processes else None
+        if now - self._mqtt_checked >= MQTT_CHECK_S:
+            self._mqtt_checked = now
+            self.mqtt_exposed = SystemHealth.mqtt_exposure()
         self.store.add_sample(now, h.get("cpu_temp"), h.get("load1"), h.get("mem_pct"),
                               h.get("disk_pct"), h.get("throttled"), h.get("uptime"))
         if self.watchdog:

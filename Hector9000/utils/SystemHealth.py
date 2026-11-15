@@ -123,6 +123,32 @@ def ip_addresses():
         return []
 
 
+MQTT_PORTS = (1883, 9001)
+
+
+def mqtt_exposure(ips=None, ports=MQTT_PORTS, timeout=0.4, connect=socket.create_connection):
+    """MQTT ports that answer on one of this machine's OWN network addresses.
+
+    Everything that talks MQTT here runs on this machine, so the broker should be reachable on
+    127.0.0.1 only. A port that also answers on the LAN address means anybody in the Wi-Fi can
+    start dosing, reboot or leave the kiosk.
+    [] = only local (good), [1883, ...] = exposed, None = could not be checked (no address)."""
+    candidates = [ip for ip in (ip_addresses() if ips is None else ips)
+                  if ip and ":" not in ip and not ip.startswith("127.")]
+    if not candidates:
+        return None
+    exposed = []
+    for port in ports:
+        for ip in candidates:
+            try:
+                connect((ip, port), timeout).close()
+            except OSError:
+                continue
+            exposed.append(port)
+            break
+    return exposed
+
+
 def running_processes(expected=None):
     """name -> True/False for every expected process, or None if `ps` is unavailable."""
     expected = EXPECTED_PROCESSES if expected is None else expected

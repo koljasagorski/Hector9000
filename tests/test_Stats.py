@@ -280,3 +280,49 @@ def test_prune_keeps_the_tables_within_their_caps(store, monkeypatch):
     assert store._one("SELECT COUNT(*) AS n FROM events")["n"] == 30
     newest = store._one("SELECT MAX(ts) AS t FROM doses")["t"]
     assert newest == 1199                         # the newest rows survive, the oldest go
+
+
+# ---------------------------------------------------------------- MQTT broker exposure
+
+def test_mqtt_exposure_reports_ports_that_answer_on_the_lan_address():
+    from Hector9000.utils import SystemHealth as SH
+    tried = []
+
+    class Sock:
+        def close(self):
+            pass
+
+    def connect(address, timeout):
+        tried.append(address)
+        if address[1] == 1883:
+            return Sock()
+        raise ConnectionRefusedError()
+
+    assert SH.mqtt_exposure(["192.168.1.20", "fe80::1", "127.0.0.1"], connect=connect) == [1883]
+    assert all(ip == "192.168.1.20" for ip, _ in tried)             # only the own LAN address, never loopback/IPv6
+
+    def refuse(address, timeout):
+        raise ConnectionRefusedError()
+
+    assert SH.mqtt_exposure(["192.168.1.20"], connect=refuse) == []   # only local: good
+    assert SH.mqtt_exposure([], connect=refuse) is None               # no address: cannot say
+    assert SH.mqtt_exposure(["127.0.0.1", "::1"], connect=refuse) is None
+
+
+def test_mqtt_exposure_is_part_of_the_overview_and_checked_rarely(tmp_path):
+    import argparse
+    from Hector9000 import StatsServer as SS
+    app = SS.build_app(argparse.Namespace(demo=True), env={"HECTOR_STATE_DIR": str(tmp_path)})
+    calls = []
+    app.health = lambda: {"cpu_temp": 40.0, "load1": 0.1, "mem_pct": 10.0, "disk_pct": 10.0, "throttled": None, "uptime": 5}
+    orig = SS.SystemHealth.mqtt_exposure
+    SS.SystemHealth.mqtt_exposure = lambda: calls.append(1) or [9001]
+    try:
+        assert app.overview()["mqtt_exposed"] is None                 # not checked yet
+        app.sample_health(1000.0)
+        app.sample_health(1060.0)                                     # a minute later: not asked again
+        assert len(calls) == 1 and app.overview()["mqtt_exposed"] == [9001]
+        app.sample_health(1000.0 + SS.MQTT_CHECK_S)
+        assert len(calls) == 2
+    finally:
+        SS.SystemHealth.mqtt_exposure = orig

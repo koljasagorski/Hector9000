@@ -64,6 +64,9 @@
         if (missing.length) box.appendChild(h("div", { class: "hint bad", text: "Prozess läuft nicht: " + missing.join(", ") }));
         if (ov.health.throttle_reasons && ov.health.throttle_reasons.length)
             box.appendChild(h("div", { class: "hint", text: "Raspberry Pi meldet: " + ov.health.throttle_reasons.join(", ") }));
+        if (ov.mqtt_exposed && ov.mqtt_exposed.length)
+            box.appendChild(h("div", { class: "hint bad", text: "Der MQTT-Broker ist im Netzwerk erreichbar (Port " + ov.mqtt_exposed.join(", ") +
+                "): jeder im WLAN kann den Hector steuern. Siehe Reiter „System“." }));
     }
 
     // ------------------------------------------------------------- overview ---
@@ -290,7 +293,11 @@
                 h("dt", { text: "Speicher" }), h("dd", { text: hl.mem_pct === null ? "–" : H.pct(hl.mem_pct) }),
                 h("dt", { text: "Karte" }), h("dd", { text: hl.disk_pct === null ? "–" : H.pct(hl.disk_pct) }),
                 h("dt", { text: "Läuft seit" }), h("dd", { text: H.dur(hl.uptime) }),
-                h("dt", { text: "Pi-Status" }), h("dd", { text: hl.throttled === null ? "kein Pi / unbekannt" : (hl.throttle_reasons.join(", ") || "alles in Ordnung") })])]),
+                h("dt", { text: "Pi-Status" }), h("dd", { text: hl.throttled === null ? "kein Pi / unbekannt" : (hl.throttle_reasons.join(", ") || "alles in Ordnung") }),
+                h("dt", { text: "MQTT-Broker" }), h("dd", {}, ov.mqtt_exposed === null || ov.mqtt_exposed === undefined ? "noch nicht geprüft"
+                    : (ov.mqtt_exposed.length ? [pill("im Netzwerk erreichbar: Port " + ov.mqtt_exposed.join(", "), "error"),
+                        h("div", { class: "hint", text: "Alles läuft auf diesem Gerät, der Broker braucht nur 127.0.0.1. Auf dem alten Pi sperrt hector9000-mqtt-guard die Ports (deploy/sd-update), im schlanken OS ist der Broker ohnehin nur lokal." })]
+                        : pill("nur lokal", "")))])]),
             h("section", { class: "card" }, [panelHead("Hinweise"), h("p", { class: "note", text:
                 "Öffentliche Statistik: /  ·  Admin: /admin (Benutzer „admin“, Passwort steht in der Datei admin_password im Zustandsordner, siehe docs/stats.md). " +
                 "Die Verbindung ist unverschlüsselt (HTTP) – nur im vertrauenswürdigen Netz verwenden." })])
