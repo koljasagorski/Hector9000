@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+#
+# Session wrapper for hector-kiosk.service (installed to /usr/local/bin).
+#
+# Runs the WebUI kiosk launcher (kiosk.sh from Hector9000WebUI: waits for the
+# MQTT websocket, starts Chromium, restarts it after a crash) inside "cage",
+# a single-application Wayland compositor.
+#
+# Exit codes (what the unit relies on):
+#   0   the "leave fullscreen" flag exists (secret button / kiosk.sh --exit)
+#       -> clean stop, the unit does not restart and hands tty1 to the
+#       maintenance menu (OnSuccess=)
+#   >0  cage or the launcher failed -> Restart=on-failure
+#
+set -u
+
+WEBUI="${HECTOR_WEBUI_DIR:-/opt/hector9000/webui}"
+EXIT_FLAG="/tmp/hector9000-kiosk/exit"
+LAUNCHER="${WEBUI}/kiosk.sh"
+
+if [ ! -x "$LAUNCHER" ]; then
+    echo "[hector-kiosk] ${LAUNCHER} missing or not executable" >&2
+    exit 1
+fi
+if ! command -v cage >/dev/null 2>&1; then
+    echo "[hector-kiosk] cage not installed (apt install cage)" >&2
+    exit 1
+fi
+
+# pam_systemd normally sets this; fall back for odd start methods
+export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+
+# -s: allow VT switching (Ctrl+Alt+F2 gives a login prompt on a USB keyboard)
+cage -s -- "$LAUNCHER"
+code=$?
+
+if [ -e "$EXIT_FLAG" ]; then
+    exit 0
+fi
+exit "$code"

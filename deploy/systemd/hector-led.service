@@ -1,0 +1,27 @@
+[Unit]
+Description=Hector9000 LED strip server (WS2812 on GPIO 18)
+Documentation=file:///opt/hector9000/backend/deploy/README.md
+After=mosquitto.service
+Wants=mosquitto.service
+PartOf=hector.target
+
+[Service]
+Type=simple
+# root: the WS2812 PWM/DMA output needs /dev/mem (same as "sudo python3
+# LEDStripServer.py" in start.sh)
+User=root
+Group=root
+WorkingDirectory=/opt/hector9000/backend
+Environment=PYTHONPATH=/opt/hector9000/backend
+Environment=PYTHONUNBUFFERED=1
+EnvironmentFile=-/etc/hector9000/hector.env
+ExecStart=/opt/hector9000/venv/bin/python /opt/hector9000/backend/Hector9000/LEDStripServer.py
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectHome=yes
+ProtectSystem=full
+
+[Install]
+WantedBy=hector.target

@@ -1,0 +1,29 @@
+[Unit]
+Description=Hector9000 hardware server (MQTT -> valves, pump, scale, arm)
+Documentation=file:///opt/hector9000/backend/deploy/README.md
+After=mosquitto.service
+Wants=mosquitto.service
+PartOf=hector.target
+
+[Service]
+Type=simple
+User=hector
+Group=hector
+# h9k.db is opened relative to the working directory (conf/database.py),
+# so the databases end up in the state directory (writable data partition).
+WorkingDirectory=/var/lib/hector9000
+StateDirectory=hector9000
+Environment=PYTHONPATH=/opt/hector9000/backend
+Environment=PYTHONUNBUFFERED=1
+EnvironmentFile=-/etc/hector9000/hector.env
+ExecStart=/opt/hector9000/venv/bin/python /opt/hector9000/backend/Hector9000/HectorServer.py
+Restart=on-failure
+RestartSec=3
+# the dosing loop is time critical, keep it responsive
+Nice=-5
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=full
+
+[Install]
+WantedBy=hector.target

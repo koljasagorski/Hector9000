@@ -1,0 +1,34 @@
+[Unit]
+Description=Hector9000 statistics and admin dashboard (HTTP port 8080)
+Documentation=file:///opt/hector9000/backend/deploy/README.md
+After=mosquitto.service
+Wants=mosquitto.service
+PartOf=hector.target
+
+[Service]
+Type=simple
+User=hector
+Group=hector
+WorkingDirectory=/opt/hector9000/backend
+StateDirectory=hector9000
+Environment=PYTHONPATH=/opt/hector9000/backend
+Environment=PYTHONUNBUFFERED=1
+Environment=HECTOR_STATE_DIR=/var/lib/hector9000
+Environment=HECTOR_DB=/var/lib/hector9000/h9k.db
+# values in hector.env (admin password, Matrix) override the lines above
+EnvironmentFile=-/etc/hector9000/hector.env
+ExecStart=/opt/hector9000/venv/bin/python Hector9000/StatsServer.py
+Restart=on-failure
+RestartSec=5
+# a flood of connections from the Wi-Fi must not take the machine down with it
+MemoryMax=200M
+TasksMax=64
+LimitNOFILE=256
+OOMScoreAdjust=500
+# no NoNewPrivileges: the admin action "set clock" uses sudo (see sudoers.d/hector9000)
+PrivateTmp=yes
+ProtectHome=yes
+ProtectSystem=full
+
+[Install]
+WantedBy=hector.target

@@ -1,0 +1,26 @@
+[Unit]
+Description=Hector9000 controller (drinks, recipes, system actions)
+Documentation=file:///opt/hector9000/backend/deploy/README.md
+After=mosquitto.service hector-server.service
+Wants=mosquitto.service hector-server.service
+PartOf=hector.target
+
+[Service]
+Type=simple
+User=hector
+Group=hector
+WorkingDirectory=/var/lib/hector9000
+StateDirectory=hector9000
+Environment=PYTHONPATH=/opt/hector9000/backend
+Environment=PYTHONUNBUFFERED=1
+EnvironmentFile=-/etc/hector9000/hector.env
+ExecStart=/opt/hector9000/venv/bin/python /opt/hector9000/backend/Hector9000/HectorController.py
+Restart=on-failure
+RestartSec=3
+# Deliberately NO NoNewPrivileges / PrivateTmp here:
+#  - "sudo -n systemctl reboot" (HectorSystem) needs the setuid sudo,
+#  - the kiosk exit flag /tmp/hector9000-kiosk/exit is shared with the kiosk.
+ProtectSystem=full
+
+[Install]
+WantedBy=hector.target

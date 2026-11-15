@@ -1,0 +1,26 @@
+[Unit]
+Description=Hector9000 maintenance menu on tty1 (kiosk stopped)
+Documentation=file:///opt/hector9000/backend/deploy/README.md
+After=systemd-user-sessions.service getty@tty1.service
+Conflicts=hector-kiosk.service getty@tty1.service
+
+[Service]
+Type=simple
+User=hector
+Group=hector
+PAMName=login
+TTYPath=/dev/tty1
+TTYReset=yes
+TTYVHangup=yes
+TTYVTDisallocate=yes
+StandardInput=tty
+StandardOutput=tty
+StandardError=journal
+UtmpIdentifier=tty1
+UtmpMode=user
+Environment=TERM=linux
+ExecStart=/usr/local/bin/hector-maint
+Restart=on-failure
+RestartSec=2
+
+# no [Install]: started by hector-kiosk.service (OnSuccess/OnFailure)

@@ -1,0 +1,8 @@
+[Unit]
+Description=Hector9000 (all services)
+Documentation=file:///opt/hector9000/backend/deploy/README.md
+Wants=hector-server.service hector-controller.service hector-led.service hector-stats.service hector-kiosk.service
+After=mosquitto.service
+
+[Install]
+WantedBy=multi-user.target

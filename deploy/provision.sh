@@ -1,0 +1,350 @@
+#!/usr/bin/env bash
+#
+# Hector9000 provisioning for Raspberry Pi OS Lite (Debian 12 "bookworm").
+#
+# Turns a freshly flashed Raspberry Pi OS Lite into a Hector9000 kiosk:
+# mosquitto (localhost only), the Hector services as systemd units, a Python
+# virtualenv, and a Chromium kiosk in "cage" on tty1. Idempotent: run it again
+# after a `git pull` to roll out changes. See deploy/README.md.
+#
+#   sudo ./deploy/provision.sh [options]
+#
+# Options:
+#   --backend-dir DIR   backend checkout (default: the repo this script is in)
+#   --webui-dir DIR     existing WebUI checkout (default: /opt/hector9000/webui;
+#                       cloned from --webui-repo if missing)
+#   --webui-repo URL    where to clone the WebUI from
+#   --webui-branch B    branch to clone (default feature/congress-design)
+#   --requirements F    pip requirements file (default deploy/requirements-bookworm.txt)
+#   --start             start the services right away (takes over tty1!)
+#   --overlayfs         enable the read-only root overlay at the very end
+#                       (refuses unless /var/lib/hector9000 is its own mount)
+#   --skip-apt          do not run apt-get (packages already installed)
+#   --skip-venv         do not (re)build the Python virtualenv
+#   --no-systemd        copy the unit files but never call systemctl
+#                       (containers, image building)
+#   --dry-run           only print what would be done
+#   -h, --help          this text
+#
+set -euo pipefail
+
+# ------------------------------------------------------------------ defaults
+HECTOR_USER="hector"
+HECTOR_GROUPS=(gpio i2c spi video render input systemd-journal)
+PREFIX="/opt/hector9000"
+STATE_DIR="/var/lib/hector9000"
+ETC_DIR="/etc/hector9000"
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+DEFAULT_BACKEND="$(cd "${SCRIPT_DIR}/.." && pwd)"
+
+BACKEND_SRC="${DEFAULT_BACKEND}"
+WEBUI_SRC=""
+WEBUI_REPO="${HECTOR_WEBUI_REPO:-https://github.com/koljasagorski/Hector9000WebUI.git}"
+WEBUI_BRANCH="${HECTOR_WEBUI_BRANCH:-feature/congress-design}"
+REQUIREMENTS=""
+
+DRY_RUN=0
+USE_SYSTEMD=1
+OVERLAYFS=0
+START=0
+SKIP_APT=0
+SKIP_VENV=0
+CHANGED_MOSQUITTO=0
+
+# --------------------------------------------------------------------- utils
+log()  { printf '\033[1m==>\033[0m %s\n' "$*"; }
+info() { printf '    %s\n' "$*"; }
+warn() { printf '\033[33mWARN:\033[0m %s\n' "$*" >&2; }
+die()  { printf '\033[31mERROR:\033[0m %s\n' "$*" >&2; exit 1; }
+
+usage() { sed -n '3,/^set -euo/p' "${BASH_SOURCE[0]}" | sed -e '$d' -e 's/^# \{0,1\}//' -e 's/^#$//'; }
+
+# run COMMAND...: print it, execute unless --dry-run
+run() {
+    if [ "$DRY_RUN" = 1 ]; then
+        printf '    [dry-run] %s\n' "$*"
+    else
+        "$@"
+    fi
+}
+
+need_arg() { if [ "$#" -lt 2 ] || [ -z "$2" ]; then die "option $1 needs a value"; fi; }
+
+# install_file SRC DEST MODE [OWNER:GROUP]: copy only when content/mode differs
+install_file() {
+    local src="$1" dest="$2" mode="$3" owner="${4:-root:root}" want_mode
+    [ -f "$src" ] || die "missing source file: $src"
+    want_mode="$(printf '%o' "$((8#${mode}))")"   # "0755" -> "755", like stat prints it
+    if [ -f "$dest" ] && cmp -s "$src" "$dest" \
+        && [ "$(stat -c '%a' "$dest")" = "$want_mode" ] \
+        && [ "$(stat -c '%U:%G' "$dest")" = "$owner" ]; then
+        info "unchanged: $dest"
+        return 1
+    fi
+    info "install:   $dest"
+    run install -D -m "$mode" -o "${owner%%:*}" -g "${owner##*:}" "$src" "$dest"
+    return 0
+}
+
+# link_dir SRC DEST: DEST becomes a symlink to SRC (or already is SRC)
+link_dir() {
+    local src dest="$2" cur
+    src="$(cd "$1" && pwd -P)"
+    if [ -L "$dest" ]; then
+        cur="$(readlink -f "$dest")"
+        if [ "$cur" = "$src" ]; then
+            info "unchanged: $dest -> $src"
+            return
+        fi
+        info "relink:    $dest -> $src (was $cur)"
+        run ln -sfn "$src" "$dest"
+    elif [ -e "$dest" ]; then
+        [ "$(cd "$dest" && pwd -P)" = "$src" ] || \
+            die "$dest exists and is not $src - move it away or pass the right --backend-dir/--webui-dir"
+        info "unchanged: $dest"
+    else
+        info "link:      $dest -> $src"
+        run mkdir -p "$(dirname "$dest")"
+        run ln -s "$src" "$dest"
+    fi
+}
+
+ensure_line() {   # ensure_line FILE LINE
+    if grep -qxF -- "$2" "$1" 2>/dev/null; then
+        info "unchanged: $1 ($2)"
+    else
+        info "append:    $1 ($2)"
+        if [ "$DRY_RUN" = 1 ]; then printf '    [dry-run] echo %s >> %s\n' "$2" "$1"; else echo "$2" >> "$1"; fi
+    fi
+}
+
+# ------------------------------------------------------------------ arguments
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --backend-dir)   need_arg "$@"; BACKEND_SRC="$2"; shift ;;
+        --webui-dir)     need_arg "$@"; WEBUI_SRC="$2"; shift ;;
+        --webui-repo)    need_arg "$@"; WEBUI_REPO="$2"; shift ;;
+        --webui-branch)  need_arg "$@"; WEBUI_BRANCH="$2"; shift ;;
+        --requirements)  need_arg "$@"; REQUIREMENTS="$2"; shift ;;
+        --start)         START=1 ;;
+        --overlayfs)     OVERLAYFS=1 ;;
+        --skip-apt)      SKIP_APT=1 ;;
+        --skip-venv)     SKIP_VENV=1 ;;
+        --no-systemd)    USE_SYSTEMD=0 ;;
+        --dry-run)       DRY_RUN=1 ;;
+        -h|--help)       usage; exit 0 ;;
+        *)               die "unknown option: $1 (see --help)" ;;
+    esac
+    shift
+done
+
+[ -d "$BACKEND_SRC/Hector9000" ] || die "not a Hector9000 backend checkout: $BACKEND_SRC"
+BACKEND_SRC="$(cd "$BACKEND_SRC" && pwd -P)"
+DEPLOY="${BACKEND_SRC}/deploy"
+[ -d "$DEPLOY/systemd" ] || die "deploy/systemd not found in $BACKEND_SRC"
+[ -n "$REQUIREMENTS" ] || REQUIREMENTS="${DEPLOY}/requirements-bookworm.txt"
+
+if [ "$DRY_RUN" = 0 ] && [ "$(id -u)" -ne 0 ]; then
+    die "run as root (sudo $0 ...), or use --dry-run"
+fi
+
+# -------------------------------------------------------------- 0. platform
+log "Platform"
+# shellcheck disable=SC1091
+. /etc/os-release
+case " ${ID:-} ${ID_LIKE:-} " in
+    *" debian "*|*" raspbian "*) ;;
+    *) die "needs Debian/Raspberry Pi OS (found ${PRETTY_NAME:-unknown})" ;;
+esac
+[ "${VERSION_CODENAME:-}" = "bookworm" ] || \
+    warn "written for bookworm, found '${VERSION_CODENAME:-?}' - package names may differ"
+ARCH="$(dpkg --print-architecture 2>/dev/null || uname -m)"
+info "${PRETTY_NAME:-?} / ${ARCH} / dry-run=${DRY_RUN} systemd=${USE_SYSTEMD}"
+if [ "$USE_SYSTEMD" = 1 ] && [ ! -d /run/systemd/system ] && [ "$DRY_RUN" = 0 ]; then
+    die "systemd is not running here - use --no-systemd (container/chroot)"
+fi
+
+# ------------------------------------------------------------------ 1. apt
+PACKAGES=(git rsync curl ca-certificates sudo mosquitto mosquitto-clients
+          i2c-tools iproute2 python3 python3-venv python3-pip python3-dev
+          build-essential libffi-dev cage libpam-systemd libgl1-mesa-dri)
+
+if [ "$SKIP_APT" = 1 ]; then
+    log "Packages: skipped (--skip-apt)"
+else
+    log "Packages"
+    run env DEBIAN_FRONTEND=noninteractive apt-get update
+    # Raspberry Pi OS ships "chromium"; older images only "chromium-browser".
+    # (No `grep -q` in a pipe here: with pipefail it can fail the pipeline via SIGPIPE.)
+    chromium_candidate="$(apt-cache policy chromium 2>/dev/null | awk '/Candidate:/ {print $2}')"
+    if [ -n "$chromium_candidate" ] && [ "$chromium_candidate" != "(none)" ]; then
+        PACKAGES+=(chromium)
+    else
+        PACKAGES+=(chromium-browser)
+    fi
+    run env DEBIAN_FRONTEND=noninteractive apt-get install -y "${PACKAGES[@]}"
+fi
+
+# ------------------------------------------------------- 2. interfaces I2C/SPI
+log "I2C / SPI"
+if command -v raspi-config >/dev/null 2>&1; then
+    run raspi-config nonint do_i2c 0
+    run raspi-config nonint do_spi 0
+else
+    found=0
+    for cfg in /boot/firmware/config.txt /boot/config.txt; do
+        if [ -f "$cfg" ]; then
+            found=1
+            ensure_line "$cfg" "dtparam=i2c_arm=on"
+            ensure_line "$cfg" "dtparam=spi=on"
+            break
+        fi
+    done
+    [ "$found" = 1 ] || warn "no raspi-config and no config.txt - not a Raspberry Pi? I2C/SPI not enabled"
+fi
+run mkdir -p /etc/modules-load.d
+if [ "$DRY_RUN" = 1 ]; then
+    printf '    [dry-run] write /etc/modules-load.d/hector9000.conf (i2c-dev)\n'
+else
+    printf 'i2c-dev\n' > /etc/modules-load.d/hector9000.conf
+fi
+
+# ---------------------------------------------------------------- 3. user
+log "User ${HECTOR_USER}"
+for g in "${HECTOR_GROUPS[@]}"; do
+    getent group "$g" >/dev/null || run groupadd --system "$g"
+done
+groups_csv="$(IFS=,; echo "${HECTOR_GROUPS[*]}")"
+if id -u "$HECTOR_USER" >/dev/null 2>&1; then
+    info "user exists, making sure of the groups"
+    run usermod -aG "$groups_csv" "$HECTOR_USER"
+else
+    info "creating user (no password, login only via sudo/su)"
+    run useradd --create-home --shell /bin/bash --groups "$groups_csv" "$HECTOR_USER"
+fi
+
+# --------------------------------------------------------------- 4. dirs
+log "Directories"
+run install -d -m 0755 "$PREFIX"
+run install -d -m 0750 -o "$HECTOR_USER" -g "$HECTOR_USER" "$STATE_DIR"
+run install -d -m 0750 -o root -g "$HECTOR_USER" "$ETC_DIR"
+link_dir "$BACKEND_SRC" "${PREFIX}/backend"
+
+if [ -n "$WEBUI_SRC" ]; then
+    [ -d "$WEBUI_SRC" ] || die "--webui-dir $WEBUI_SRC does not exist"
+    link_dir "$WEBUI_SRC" "${PREFIX}/webui"
+elif [ -e "${PREFIX}/webui" ]; then
+    info "WebUI present: ${PREFIX}/webui"
+else
+    log "Cloning WebUI (${WEBUI_REPO}, branch ${WEBUI_BRANCH})"
+    run git clone --branch "$WEBUI_BRANCH" "$WEBUI_REPO" "${PREFIX}/webui" || \
+        die "could not clone the WebUI - clone it yourself and pass --webui-dir"
+fi
+if [ "$DRY_RUN" = 0 ]; then
+    [ -f "${PREFIX}/webui/kiosk.sh" ] || die "${PREFIX}/webui/kiosk.sh missing - is that the Hector9000WebUI checkout?"
+    chmod +x "${PREFIX}/webui/kiosk.sh"
+fi
+
+if [ ! -e "${ETC_DIR}/hector.env" ]; then
+    info "create ${ETC_DIR}/hector.env from the template (edit it for admin password / Matrix)"
+    run install -m 0640 -o root -g "$HECTOR_USER" "${DEPLOY}/hector.env.example" "${ETC_DIR}/hector.env"
+else
+    info "keep existing ${ETC_DIR}/hector.env"
+    run chown root:"$HECTOR_USER" "${ETC_DIR}/hector.env"
+    run chmod 0640 "${ETC_DIR}/hector.env"
+fi
+
+# --------------------------------------------------------------- 5. venv
+if [ "$SKIP_VENV" = 1 ]; then
+    log "Python virtualenv: skipped (--skip-venv)"
+else
+    log "Python virtualenv ${PREFIX}/venv"
+    [ -f "$REQUIREMENTS" ] || die "requirements file not found: $REQUIREMENTS"
+    VENV="${PREFIX}/venv"
+    STAMP="${VENV}/.requirements.sha256"
+    want="$(sha256sum "$REQUIREMENTS" | cut -d' ' -f1)"
+    if [ "$DRY_RUN" = 0 ] && [ -x "${VENV}/bin/python" ] && [ "$(cat "$STAMP" 2>/dev/null || true)" = "$want" ]; then
+        info "requirements unchanged ($(basename "$REQUIREMENTS"))"
+    else
+        [ -x "${VENV}/bin/python" ] || run python3 -m venv "$VENV"
+        run "${VENV}/bin/pip" install --disable-pip-version-check -r "$REQUIREMENTS"
+        if [ "$DRY_RUN" = 0 ]; then echo "$want" > "$STAMP"; fi
+    fi
+    if [ "$DRY_RUN" = 0 ]; then
+        # imports that must work without hardware
+        PYTHONPATH="${PREFIX}/backend" "${VENV}/bin/python" -c \
+            "import paho.mqtt.client, webcolors, Hector9000.utils.LEDAnimations, Hector9000.utils.HectorSystem" \
+            || die "Python smoke test failed (see above)"
+        info "Python smoke test ok"
+    fi
+fi
+
+# ----------------------------------------------- 6. units, scripts, configs
+log "Install files"
+install_file "${DEPLOY}/hector-maint"         /usr/local/bin/hector-maint         0755 || true
+install_file "${DEPLOY}/hector-kiosk-session" /usr/local/bin/hector-kiosk-session 0755 || true
+
+for unit in "${DEPLOY}"/systemd/*.service "${DEPLOY}"/systemd/*.target; do
+    install_file "$unit" "/etc/systemd/system/$(basename "$unit")" 0644 || true
+done
+
+if [ -d /etc/mosquitto ]; then
+    install_file "${DEPLOY}/mosquitto/hector.conf" /etc/mosquitto/conf.d/hector.conf 0644 && CHANGED_MOSQUITTO=1
+else
+    warn "/etc/mosquitto missing - mosquitto not installed (--skip-apt?)"
+fi
+
+# sudoers: validate before it goes live, a broken file would lock out sudo
+SUDOERS_SRC="${DEPLOY}/sudoers.d/hector9000"
+if command -v visudo >/dev/null 2>&1; then
+    visudo -cf "$SUDOERS_SRC" >/dev/null || die "sudoers file invalid: $SUDOERS_SRC"
+    install_file "$SUDOERS_SRC" /etc/sudoers.d/hector9000 0440 || true
+else
+    warn "visudo not found - sudoers rules NOT installed (reboot/kiosk exit from the UI will not work)"
+fi
+
+# ---------------------------------------------------------- 7. services
+if [ "$USE_SYSTEMD" = 1 ]; then
+    log "Services"
+    run systemctl daemon-reload
+    run systemctl enable mosquitto.service
+    run systemctl enable hector.target hector-server.service hector-controller.service \
+        hector-led.service hector-stats.service hector-kiosk.service
+    if [ "$CHANGED_MOSQUITTO" = 1 ]; then
+        info "mosquitto config changed, restarting broker"
+        run systemctl restart mosquitto.service
+    fi
+    if [ "$START" = 1 ]; then
+        info "starting hector.target (the kiosk takes over tty1)"
+        run systemctl restart hector.target
+    else
+        info "services start at the next boot (or: sudo systemctl start hector.target)"
+    fi
+else
+    log "Services: skipped (--no-systemd)"
+fi
+
+# ---------------------------------------------------------- 8. overlayfs
+if [ "$OVERLAYFS" = 1 ]; then
+    log "Read-only root (overlay file system)"
+    if ! mountpoint -q "$STATE_DIR"; then
+        die "$STATE_DIR is not a separate partition. With a read-only root the databases would
+       be lost at every reboot. Create a data partition and mount it there first (deploy/README.md)."
+    fi
+    if command -v raspi-config >/dev/null 2>&1; then
+        run raspi-config nonint enable_overlayfs
+        info "takes effect after the next reboot. Undo with: raspi-config nonint disable_overlayfs"
+    else
+        warn "raspi-config not found - enable the overlay manually (Performance Options)"
+    fi
+fi
+
+log "Done"
+cat <<EOF
+    Next steps:
+      1. Copy your data (h9k.db, calibration) - see deploy/README.md, "Migrate data"
+      2. Edit ${ETC_DIR}/hector.env (admin password, Matrix) if you want
+      3. sudo reboot      (or: sudo systemctl start hector.target)
+    The statistics page will be at http://<ip>:8080/ ; MQTT is localhost only.
+EOF
