@@ -369,16 +369,23 @@ def test_healthz_works_over_a_real_socket(live):
 
 def test_connection_limit_answers_503_instead_of_piling_up_threads(live):
     port = live.server_address[1]
+    def until(prefix, seconds=5):
+        """Ask until the answer starts with prefix (the server thread may need a moment under load)."""
+        deadline = time.time() + seconds
+        while True:
+            reply = _raw_request(port, b"GET /healthz HTTP/1.0\r\n\r\n")
+            if reply.startswith(prefix) or time.time() > deadline:
+                return reply
+            time.sleep(0.1)
+
     holders = [socket.create_connection(("127.0.0.1", port), timeout=5) for _ in range(3)]  # send nothing
     try:
-        time.sleep(0.3)
-        reply = _raw_request(port, b"GET /healthz HTTP/1.0\r\n\r\n")
-        assert reply.startswith(b"HTTP/1.1 503")
+        assert until(b"HTTP/1.1 503").startswith(b"HTTP/1.1 503")
     finally:
         for h in holders:
             h.close()
-    time.sleep(0.5)       # the slots are free again once the holders are gone
-    assert _raw_request(port, b"GET /healthz HTTP/1.0\r\n\r\n").startswith(b"HTTP/1.0 200")
+    # the slots are free again once the holders are gone
+    assert until(b"HTTP/1.0 200").startswith(b"HTTP/1.0 200")
 
 
 def test_slow_client_is_cut_off_after_the_total_deadline(live, monkeypatch):
