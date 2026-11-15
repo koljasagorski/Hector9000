@@ -228,9 +228,11 @@ def test_untrusted_alerts_are_capped_per_hour_with_one_summary():
     assert n.stats["suppressed"] == 15
     # internal checks (watchdog, temperature, ...) are not affected by the flood
     assert n.notify("critical", "CPU heiß", key="temp", source="watchdog") is True
-    # and the cap opens again after an hour
+    # and the cap opens again after an hour, with a recap of what was held back
     clock.t += 3601
     assert n.notify("error", "again", source="x", untrusted=True) is True
+    recap = [i["text"] for i in n.queue if "wurden unterdrückt" in i["text"]]
+    assert len(recap) == 1 and "15" in recap[0] and "x 15×" in recap[0]
 
 
 def test_untrusted_text_is_clipped_harder():

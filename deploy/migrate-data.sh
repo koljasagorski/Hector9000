@@ -85,6 +85,12 @@ cmd_import() {
         systemctl stop hector.target hector-kiosk hector-controller hector-server hector-led hector-stats 2>/dev/null || true
     fi
 
+    # The checks below only hold while nothing runs as the service user (it could create a
+    # link in $STATE_DIR between our check and our write). Stopping the units is not enough
+    # for a stray process (e.g. an SSH session), so refuse to go on if one exists.
+    if pgrep -u "$HECTOR_USER" >/dev/null 2>&1; then
+        die "processes are still running as $HECTOR_USER ($(pgrep -u "$HECTOR_USER" -l | head -c 200 | tr '\n' ' ')) - stop them (pkill -u $HECTOR_USER) and run again"
+    fi
     install -d -m 0750 -o "$HECTOR_USER" -g "$HECTOR_USER" "$STATE_DIR"
     # $STATE_DIR belongs to the service user, but this script writes there as root. A symbolic
     # link planted by that user would redirect root's writes (backup copies) to any file.

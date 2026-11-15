@@ -140,6 +140,7 @@ class Notifier:
         self.max_untrusted = max_untrusted_per_hour
         self._untrusted_times = []
         self._flood_reported = False
+        self._suppressed = {}              # source -> how many alerts were held back
         self.queue = []
         self.sent_keys = {}          # key -> time of the last alert that was queued
         self.active = set()          # keys with an unresolved alert
@@ -173,7 +174,7 @@ class Notifier:
                 last = self.sent_keys.get(key)
                 if last is not None and now - last < self.dedup_s:
                     return False
-                if untrusted and not self._untrusted_allowed(now):
+                if untrusted and not self._untrusted_allowed(now, source):
                     return False
                 self.sent_keys[key] = now
                 self.active.add(key)
@@ -186,11 +187,15 @@ class Notifier:
         except Exception:
             return False
 
-    def _untrusted_allowed(self, now):
-        """Caller holds the lock. At most max_untrusted alerts per hour; one summary says so."""
+    def _untrusted_allowed(self, now, source=""):
+        """Caller holds the lock. At most max_untrusted alerts per hour; one summary says so
+        when it starts and one recap (count and sources) when alerts flow again."""
         self._untrusted_times = [t for t in self._untrusted_times if now - t < 3600]
         if len(self._untrusted_times) >= self.max_untrusted:
             self.stats["suppressed"] += 1
+            name = str(source or "?")[:40]
+            if name in self._suppressed or len(self._suppressed) < 20:
+                self._suppressed[name] = self._suppressed.get(name, 0) + 1
             if not self._flood_reported:
                 self._flood_reported = True
                 self._enqueue("warning", "Sehr viele Fehlermeldungen in kurzer Zeit - weitere werden "
@@ -198,7 +203,15 @@ class Notifier:
                               "notifier", now)
                 self._wake.set()
             return False
+        if self._flood_reported:
+            top = sorted(self._suppressed.items(), key=lambda kv: -kv[1])[:5]
+            self._enqueue("info", "%d Meldungen wurden unterdrückt (Quellen: %s). Alle Fehler stehen im "
+                          "Admin-Dashboard." % (sum(self._suppressed.values()),
+                                                ", ".join("%s %d×" % kv for kv in top)),
+                          "notifier", now, recovery=False)
+            self._wake.set()
         self._flood_reported = False
+        self._suppressed = {}
         self._untrusted_times.append(now)
         return True
 

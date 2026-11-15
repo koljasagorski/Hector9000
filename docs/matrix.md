@@ -46,7 +46,9 @@ Der Token wird weder geloggt noch im Admin-Dashboard angezeigt (`Notifier.status
   wirklich rausging.
 * **Fehlermeldungen, die aus MQTT stammen** (Dosierfehler, Dienst offline, hängende Dosierung) sind „nicht
   vertrauenswürdig“, weil jeder im Netz sie senden kann: sie werden auf 300 Zeichen gekürzt und auf höchstens 20 pro
-  Stunde begrenzt. Danach kommt eine einzige Meldung „weitere werden unterdrückt“. Eigene Prüfungen des Dienstes
+  Stunde begrenzt. Danach kommt eine einzige Meldung „weitere werden unterdrückt“, und sobald wieder Meldungen
+  durchgehen, eine Zusammenfassung mit Anzahl und Quellen. Echte Controller-Fehler lassen sich von gefälschten nicht
+  unterscheiden, solange der Broker anonym ist; im Admin-Dashboard stehen deshalb immer **alle** Fehler. Eigene Prüfungen des Dienstes
   (CPU-Temperatur, Stromversorgung, leere Flaschen) sind davon ausgenommen.
 * **Offline?** Nachrichten warten in einer Warteschlange (max. 50, max. 6 Stunden alt) und werden mit
   Backoff wiederholt; HTTP 429 wird mit `retry_after` beachtet. Ein falscher Token oder Raum gilt als
