@@ -92,7 +92,7 @@ Hinweise aus der Praxis:
 `boot-test.sh prepare` entpackt dafür die Partitionen (rund 2,3 GB zusätzlich), `qemu-test.sh` legt eine 8-GiB-Kopie an (rund 2,3 GB auf der Platte).
 
 **Ergebnis des letzten Laufs** (Image aus Backend-Commit `57712c1`, WebUI `c830fc5`): `check-image.sh` 109 bestanden, 0 fehlgeschlagen (1 Hinweis: kein
-Zusatzmuster in `HECTOR_CHECK_FORBIDDEN`), `boot-test.sh all` 66 bestanden, 0 fehlgeschlagen, `qemu-test.sh` alle drei Phasen bestanden (33 + 14 + 7 Prüfungen).
+Zusatzmuster in `HECTOR_CHECK_FORBIDDEN`; mit einem Zusatzmuster 110 bestanden, 0 Hinweise), `boot-test.sh all` 66 bestanden, 0 fehlgeschlagen, `qemu-test.sh` alle drei Phasen bestanden (33 + 14 + 7 Prüfungen).
 Ohne Hardware erwartet fehlgeschlagen sind im QEMU-Boot `hector-server`, `hector-led`, der Kiosk (kein Display) und `rpi-eeprom-update`.
 Der initramfs meldet „Warning: fsck not present, so skipping root file system“; das ist dort normal, die Prüfung übernimmt danach `systemd-fsck-root`
 (im Boot-Log zu sehen, ebenso `systemd-fsck@` für Boot- und Datenpartition; bei eingeschaltetem Schreibschutz wird das Root-Dateisystem nicht geprüft).
