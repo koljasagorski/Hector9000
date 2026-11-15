@@ -15,7 +15,7 @@ Seit dem Reiter **„Chat“** im Admin-Dashboard (`/admin#chat`) braucht es kei
 3. **„Raum beitreten“** nimmt die Einladung des Bots an (der Bot kann erst nach dem Beitritt schreiben), danach
    **„Testnachricht senden“**.
 
-Gespeichert wird in `$HECTOR_STATE_DIR/notify.json` (Rechte `0600`, steht in `.gitignore`, **nie ins Repository**).
+Gespeichert wird in `$HECTOR_STATE_DIR/notify.json` (Rechte `0600`, steht in `.gitignore`, **nie ins Repository**; im schlanken OS `/var/lib/hector9000/stats/notify.json`, Besitzer `hector-stats`, alter Pi: `/var/lib/hector9000/notify.json`).
 Diese Datei hat Vorrang vor den Variablen in `hector.env`; **„Gespeicherte Einstellungen löschen“** entfernt sie,
 dann gilt wieder `hector.env`. Der Haken „Fehler in den Matrix-Chat senden“ schaltet den Bot aus, ohne die Werte zu verlieren.
 

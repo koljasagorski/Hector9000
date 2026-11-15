@@ -22,20 +22,23 @@ Die öffentliche Seite zeigt **keine** Fehlertexte, IP-Adressen oder Systemdetai
     python3 Hector9000/StatsServer.py            # echter Betrieb (braucht den MQTT-Broker)
     python3 Hector9000/StatsServer.py --demo     # Fake-Daten, kein MQTT, zum Ansehen der Seiten
 
-Im schlanken OS startet `deploy/systemd/hector-stats.service` den Dienst. Auf dem alten Pi
+Im schlanken OS startet `deploy/systemd/hector-stats.service` den Dienst, als eigener Systembenutzer `hector-stats`
+(keine Gruppen außer `video`, kein sudo, Sandbox: `ProtectSystem=strict`, nur `/var/lib/hector9000/stats` beschreibbar,
+`NoNewPrivileges`, keine Capabilities). Der Dienst **startet keine anderen Programme**: Neustart, „Kiosk beenden“ und „Uhr
+stellen“ gehen als MQTT-Nachricht an den Controller. Auf dem alten Pi
 (`start.sh` darf nicht angefasst werden) gibt es dafür eine eigene Unit, siehe
-[HANDOVER.md](HANDOVER.md).
+[HANDOVER.md](HANDOVER.md) und [`deploy/sd-update/README.md`](../deploy/sd-update/README.md).
 
 ## Umgebung (alles optional)
 
 | Variable | Standard | Bedeutung |
 |---|---|---|
-| `HECTOR_STATE_DIR` | `.` | hier liegen `stats.db` und `admin_password` |
+| `HECTOR_STATE_DIR` | `.` | hier liegen `stats.db`, `admin_password` und `notify.json`; im schlanken OS `/var/lib/hector9000/stats` (setzt die Unit; nicht in `hector.env` eintragen, das würde sie überschreiben) |
 | `HECTOR_STATS_PORT` / `HECTOR_STATS_BIND` | `8080` / `0.0.0.0` | Port und Adresse |
 | `HECTOR_ADMIN_PASSWORD` | erzeugt | sonst wird einmalig ein Passwort erzeugt und in `$HECTOR_STATE_DIR/admin_password` gespeichert (Rechte 0600). Ein selbst gesetztes Passwort sollte mindestens 12 Zeichen haben (sonst Warnung im Log) |
 | `HECTOR_ADMIN_REMOTE` | `1` | `1`: `/admin` ist aus dem Netz erreichbar. `0`: nur von diesem Gerät aus (`127.0.0.1`), z. B. per `ssh -L 8080:localhost:8080 hector@<pi>`. Die öffentliche Seite bleibt immer offen |
 | `HECTOR_MQTT_HOST` | `localhost` | Broker |
-| `HECTOR_DB` | `$HECTOR_STATE_DIR/h9k.db`, dann `./h9k.db` | Hardware-DB, wird nur gelesen (Flaschennamen) |
+| `HECTOR_DB` | `$HECTOR_STATE_DIR/h9k.db`, dann `./h9k.db` | Hardware-DB, wird nur gelesen (Flaschennamen); im schlanken OS `/var/lib/hector9000/hector/h9k.db` |
 | `HECTOR_EXPECT_PROCESSES` | `server,controller,led` | Prozesse, die der Watchdog erwartet (`""` = nicht prüfen) |
 | `HECTOR_ENV_FILE` | `/etc/hector9000/hector.env` | `KEY=VALUE`-Datei, ergänzt die Umgebung (bereits gesetzte Werte gewinnen) |
 | `HECTOR_MATRIX_*`, `HECTOR_NOTIFY_LEVEL` | – | Chat-Bot, siehe [matrix.md](matrix.md). Lässt sich auch im Dashboard (Reiter „Chat“) einstellen; das Gespeicherte (`notify.json` im Zustandsordner) hat dann Vorrang |
@@ -65,9 +68,17 @@ Fehler quittieren, Matrix-Einstellungen speichern/löschen, Raum beitreten, Test
 ohne Netz geht die Uhr falsch). Gefährliches (Neustart, Reinigen, …) braucht einen Doppeltipp und
 wird **während einer Dosierung abgelehnt** (Ventile schließen geht immer).
 
-`Uhr stellen` ruft `sudo -n date -u -s @<epoche>` auf. Dafür braucht der Dienstbenutzer eine
-sudoers-Regel (`deploy/sudoers.d/hector9000`, genau 10 Ziffern, ohne Wildcard); auf dem alten Pi
-ist `NOPASSWD` ohnehin gesetzt.
+**Uhr stellen:** Der Statistikdienst hat kein sudo und startet keinen Prozess. Er veröffentlicht `Hector9000/system/setTime` mit der
+Epoche als Text; der **Controller** (Benutzer `hector`) prüft den Wert (genau 10 Ziffern, 1 700 000 000 bis 1 999 999 999,
+Nov 2023 bis Mai 2033; eine beibehaltene/„retained“ Nachricht wird ignoriert) und ruft `sudo -n date -u -s @<epoche>` auf. Die sudoers-Regel
+(`deploy/sudoers.d/hector9000`) erlaubt genau dieses Muster ohne Wildcard. Der Controller antwortet auf `…/setTime/return` mit
+`ok` oder `error` (und einer Fehlermeldung, die im Reiter „Fehler“ landet). Auf dem alten Pi läuft der Controller als `pi` mit
+`NOPASSWD`-sudo, es funktioniert dort genauso. **2033 muss der Bereich in `utils/HectorSystem.py` und in der sudoers-Regel verschoben werden**
+(ein Test prüft, dass beide übereinstimmen).
+
+**Anzeige „MQTT-Broker“:** Der Dienst verbindet sich alle 5 Minuten mit den eigenen Netzwerkadressen auf den Ports 1883 und 9001
+(nie `127.0.0.1`) und zeigt im Reiter „System“, ob sie von außen erreichbar sind. Ist das der Fall, erscheint oben ein Banner.
+Normal ist „nur lokal“. Läuft der Dienst ohne Netzwerkadresse, steht dort „noch nicht geprüft“.
 
 ## Sicherheit
 
@@ -96,11 +107,16 @@ ist `NOPASSWD` ohnehin gesetzt.
 * Statische Dateien kommen aus einer Whitelist (`/static/…`), kein Pfad nach oben, keine Punktdateien.
   CSV-Export schützt gegen Formel-Einschleusung. Antworten haben CSP- und Sicherheits-Header.
 * **Der MQTT-Broker ist auf dem alten Pi anonym**: wer das Netz erreicht, kann auch ohne Admin-Login
-  Neustart und Dosierung auslösen. Im schlanken OS lauscht mosquitto nur auf `127.0.0.1`.
+  Neustart und Dosierung auslösen. Im schlanken OS lauscht mosquitto nur auf `127.0.0.1`. Auf dem alten Pi sperrt
+  `hector9000-mqtt-guard` (nftables/iptables) die Ports 1883/9001 für alles außer `localhost`; Mosquitto bleibt unverändert.
+* **Vertrauensgrenze und Restrisiko:** MQTT kennt hier keine Absender. Wer den Broker erreicht (im schlanken OS nur Prozesse auf
+  dem Gerät), kann „Uhr stellen“ mit einem plausiblen Wert und Neustart auslösen. Das ist bewusst so: Zugriffsrechte pro Benutzer
+  bräuchten Zugangsdaten für jeden Teilnehmer, auch für den Browser der Oberfläche (Websocket 9001).
 
 ## Tests
 
     python -m pytest tests/test_Stats.py tests/test_StatsServer.py tests/test_Notifier.py \
-        tests/test_NotifySettings.py tests/test_Watchdog.py tests/test_ControllerEvents.py tests/test_HectorConfig.py
+        tests/test_NotifySettings.py tests/test_Watchdog.py tests/test_ControllerEvents.py tests/test_HectorConfig.py \
+        tests/test_HectorSystem.py tests/test_DeployLayout.py
 
 (Kein Broker nötig; die älteren Tests benötigen einen lokalen MQTT-Broker.)

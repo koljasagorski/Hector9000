@@ -2,7 +2,7 @@
 #
 # Checks a finished Hector9000 disk image WITHOUT booting it: partition table, boot files,
 # fstab, enabled units, users, owners and modes, packages, repositories, and a scan for things
-# that must never be in a shared image (keys, passwords, the private network address).
+# that must never be in a shared image (keys, passwords, tokens, and an optional extra pattern).
 #
 #   check-image.sh IMAGE
 #
@@ -182,8 +182,15 @@ section "Nothing private in the image"
 # private keys (public CA certificates are fine); the snakeoil key of ssl-cert is a known throw-away
 KEYS="$(grep -rIl --exclude-dir=proc --exclude-dir=sys -e '-----BEGIN [A-Z ]*PRIVATE KEY-----' "$W/etc" "$W/home" "$W/root" "$W/opt/hector9000/backend" "$W/opt/hector9000/webui" "$W/usr/local" "$W/var/lib" 2>/dev/null | grep -v 'ssl-cert-snakeoil' || true)"
 [ -z "$KEYS" ] && ok "no private key files" || fail "private key material: $KEYS"
-HITS="$(grep -rIl --exclude-dir=proc --exclude-dir=sys -e '10\.2\.2\.91' "$W/etc" "$W/home" "$W/root" "$W/opt/hector9000/backend" "$W/opt/hector9000/webui" "$W/usr/local" 2>/dev/null || true)"
-[ -z "$HITS" ] && ok "the private PC's address is nowhere in the image" || fail "private network address found in: $HITS"
+# Extra pattern for things that must not be in the image (an address, a name, a host): set
+# HECTOR_CHECK_FORBIDDEN to an extended regular expression in the environment. It is deliberately
+# not written down in this file.
+if [ -n "${HECTOR_CHECK_FORBIDDEN:-}" ]; then
+    HITS="$(grep -rIlE --exclude-dir=proc --exclude-dir=sys -e "$HECTOR_CHECK_FORBIDDEN" "$W/etc" "$W/home" "$W/root" "$W/opt/hector9000/backend" "$W/opt/hector9000/webui" "$W/usr/local" 2>/dev/null || true)"
+    [ -z "$HITS" ] && ok "the pattern from HECTOR_CHECK_FORBIDDEN is nowhere in the image" || fail "HECTOR_CHECK_FORBIDDEN found in: $HITS"
+else
+    warn "HECTOR_CHECK_FORBIDDEN not set - no extra pattern was searched"
+fi
 SECRETS="$(grep -rIlE --exclude-dir=.git --exclude='*.md' --exclude='*.example' --exclude='test_*' -e '(syt_[A-Za-z0-9]{20,}|ghp_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{30,}|AKIA[0-9A-Z]{16})' "$W/etc" "$W/home" "$W/root" "$W/opt/hector9000/backend" "$W/opt/hector9000/webui" 2>/dev/null || true)"
 [ -z "$SECRETS" ] && ok "no access tokens (Matrix/GitHub/AWS patterns)" || fail "token-like strings in: $SECRETS"
 

@@ -4,6 +4,13 @@ Setzt [`docs/plans/2026-11-14-slim-os.md`](../docs/plans/2026-11-14-slim-os.md) 
 kein Desktop, sondern nur mosquitto, die Hector-Dienste als systemd-Units und ein
 Chromium-Kiosk in `cage` (Wayland-Kiosk-Compositor) auf tty1.
 
+Es gibt zwei Wege zum gleichen Ergebnis:
+
+1. **Fertiges Image** auf die SD-Karte schreiben (alles ist schon installiert, die Karte wächst beim ersten Start):
+   [`deploy/image/README.md`](image/README.md). Der Weg für eine neue Karte.
+2. **Auf einer frisch geflashten Karte provisionieren** (dieses Dokument, Ablauf ab Schritt 1). Der Weg für ein
+   Update einer bestehenden Installation und für alles, was das Image nicht abdeckt.
+
 > **Teststand:** Skripte, Units, sudoers und mosquitto-Konfiguration sind in einem
 > `debian:bookworm`-Container (arm64) geprüft, siehe [Abschnitt „Teststand“](#teststand).
 > **Nicht getestet** ist alles, was echte Hardware braucht: Ventile, Pumpe, Waage,
@@ -18,14 +25,23 @@ Chromium-Kiosk in `cage` (Wayland-Kiosk-Compositor) auf tty1.
 | `hector-server` (Ventile, Pumpe, Waage, Arm) | `hector-server.service` | `hector` |
 | `hector-controller` (Rezepte, Dosieren, Neustart/Kiosk-Exit) | `hector-controller.service` | `hector` |
 | `hector-led` (WS2812 an GPIO 18) | `hector-led.service` | `root` (PWM/DMA braucht `/dev/mem`) |
-| `hector-stats` (Statistikseite + Admin-Dashboard, **HTTP 0.0.0.0:8080**) | `hector-stats.service` | `hector` |
+| `hector-stats` (Statistikseite + Admin-Dashboard, **HTTP 0.0.0.0:8080**) | `hector-stats.service` | `hector-stats` (eigener Benutzer ohne Gruppen und ohne sudo, Sandbox) |
 | `hector-kiosk` (cage + Chromium auf tty1) | `hector-kiosk.service` | `hector` |
 | `hector-maint` (Textmenü auf tty1, wenn der Kiosk gestoppt ist) | `hector-maint.service` | `hector` |
+| `hector-firstboot` (nur im Image: Datenpartition vergrößern, Ordner anlegen, Imager-Einstellungen anwenden) | `hector-firstboot.service` | `root` (einmalig) |
+| `hector-overlay` (Schreibschutz der Systempartition an/aus) | `/usr/local/sbin/hector-overlay` | `root` (per sudo vom Wartungsmenü) |
 | Ziel, das alles bündelt | `hector.target` | |
 
 Pfade: Backend `/opt/hector9000/backend`, WebUI `/opt/hector9000/webui` (beide sind
-Symlinks oder Checkouts), Python-venv `/opt/hector9000/venv`, Daten (Datenbanken,
-Statistik) `/var/lib/hector9000`, Einstellungen `/etc/hector9000/hector.env`.
+Symlinks oder Checkouts), Python-venv `/opt/hector9000/venv`, Einstellungen `/etc/hector9000/hector.env`.
+
+**Daten** liegen unter `/var/lib/hector9000` (im Image eine eigene Partition `HECTORDATA`), getrennt nach Benutzern:
+
+| Ordner | Inhalt | Besitzer, Modus |
+|---|---|---|
+| `/var/lib/hector9000` selbst | nur Einhängepunkt | `root:root` 0755 (keiner der beiden Dienstbenutzer kann den Ordner darunter durch einen Link austauschen) |
+| `hector/` | `h9k.db` (Rezepte, Zutaten, Ventilbelegung); Arbeitsverzeichnis von Server und Controller | `hector:hector` 0751, die Datei ist für alle lesbar (das Dashboard liest die Flaschennamen) |
+| `stats/` | `stats.db`, `admin_password`, `notify.json` (Matrix) | `hector-stats:hector-stats` 0750 |
 
 **Netzwerk:** MQTT ist absichtlich nur lokal erreichbar. Damit kann niemand im WLAN
 Dosieren, Neustart oder „Vollbild verlassen“ per MQTT auslösen (die offene
@@ -33,9 +49,18 @@ Broker-Lücke des alten Aufbaus). Die Statistikseite ist dagegen ein eigener
 HTTP-Dienst auf Port 8080 und aus dem Netz erreichbar; das Admin-Dashboard dort
 ist durch ein Passwort geschützt (`HECTOR_ADMIN_PASSWORD`, siehe unten).
 
+**Vertrauensgrenze:** Wer sich mit dem MQTT-Broker verbinden kann, darf alles, was die Oberfläche darf, also auch
+„Uhr stellen“ (`system/setTime`, nur plausible Werte, der Controller führt dann `date` aus) und Neustart. Deshalb
+lauscht der Broker nur auf `127.0.0.1`. MQTT hat im schlanken OS keine Benutzer und keine Rechte pro Thema; eine
+Absender-Prüfung gibt es nicht. Das Admin-Dashboard zeigt im Reiter „System“ (und mit einem Banner), ob Port 1883
+oder 9001 von außen erreichbar ist. Auf dem alten Pi (Mosquitto auf allen Schnittstellen) sperrt
+`hector9000-mqtt-guard` die Ports, siehe [`sd-update/README.md`](sd-update/README.md).
+
 ## Ablauf
 
 ### 1. Karte flashen
+
+(Mit dem fertigen Image entfällt dieser Schritt und der nächste: [`image/README.md`](image/README.md).)
 
 Raspberry Pi Imager → **Raspberry Pi OS Lite (64-bit)**, **Debian 12 „bookworm“**. 32-Bit geht
 auch (Skripte und Paketnamen sind gleich), ist aber ungetestet.
@@ -64,12 +89,12 @@ sudo /opt/hector9000/backend/deploy/provision.sh
 Das Skript ist idempotent (nach einem `git pull` einfach nochmal laufen lassen) und
 macht: Pakete (`cage chromium mosquitto i2c-tools python3-venv build-essential` …),
 I²C und SPI aktivieren, Benutzer `hector` (Gruppen `gpio i2c spi video render input
-systemd-journal`), venv mit `deploy/requirements-bookworm.txt`, Units, mosquitto-Konfiguration,
+systemd-journal`) und `hector-stats` (keine Gruppen außer `video` für `vcgencmd`), venv mit `deploy/requirements-bookworm.txt`, Units, mosquitto-Konfiguration,
 sudoers-Regeln (vorher mit `visudo -cf` geprüft), `/etc/hector9000/hector.env` aus der Vorlage.
 
 Optionen: `--backend-dir`, `--webui-dir` (vorhandene Checkouts), `--webui-repo`/`--webui-branch`
 (falls das WebUI geklont werden soll), `--requirements`, `--skip-apt`, `--skip-venv`, `--start`,
-`--overlayfs`, `--no-systemd`, `--dry-run`. `provision.sh --help` zeigt alles.
+`--overlayfs`, `--image` (beim Bauen eines Images im chroot: Units nur aktivieren, nichts starten), `--no-systemd`, `--dry-run`. `provision.sh --help` zeigt alles.
 
 Das WebUI wird von `koljasagorski/Hector9000WebUI` (Branch `feature/congress-design`) geklont,
 wenn `/opt/hector9000/webui` fehlt. Alternativ vorher selbst klonen und `--webui-dir` angeben.
@@ -89,12 +114,12 @@ Archiv auf den neuen Pi kopieren (`scp`) und dort:
 sudo /opt/hector9000/backend/deploy/migrate-data.sh import hector-data.tar.gz
 ```
 
-- **Datenbank** `h9k.db` (und `h9k.db.*`) landet in `/var/lib/hector9000`, eine vorhandene wird
+- **Datenbank** `h9k.db` (und `h9k.db.*`) landet in `/var/lib/hector9000/hector`, eine vorhandene wird
   als `h9k.db.bak-<Zeit>` gesichert. Die Dienste öffnen `h9k.db` relativ zu ihrem Arbeitsverzeichnis;
-  `WorkingDirectory=/var/lib/hector9000` in den Units sorgt dafür, dass sie dort liegt.
+  `WorkingDirectory=/var/lib/hector9000/hector` in den Units sorgt dafür, dass sie dort liegt.
 - **Kalibrierung und Ventilpositionen** stehen im Code: `hx711.ref` und `valvepositions` in
   `Hector9000/conf/HectorConfig.py`, die Rezepte in `Hector9000/conf/drinks.py`. Der Import legt die
-  lokalen Änderungen des alten Pi unter `/var/lib/hector9000/migrated/` ab (Patch, volle Kopien der
+  lokalen Änderungen des alten Pi unter `/var/lib/hector9000/hector/migrated/` ab (Patch, volle Kopien der
   geänderten Dateien, `info.txt` mit Commit) und prüft nur, ob der Patch passt (`git apply --check`).
   **Er ändert den Checkout nicht.** Übertrage die Werte von Hand (oder wende den Patch an) und starte neu:
   `sudo systemctl restart hector.target`. Siehe TODO „Konfiguration außerhalb des Repos“ unten.
@@ -105,12 +130,16 @@ sudo /opt/hector9000/backend/deploy/migrate-data.sh import hector-data.tar.gz
 
 | Variable | Bedeutung |
 |---|---|
-| `HECTOR_STATE_DIR` | Ordner für Statistik, Tokens, Datenbanken des Stats-Servers (`/var/lib/hector9000`) |
-| `HECTOR_ADMIN_PASSWORD` | Passwort des Admin-Dashboards. Leer: der Stats-Server erzeugt beim ersten Start eines und legt es in `$HECTOR_STATE_DIR` ab |
-| `HECTOR_MATRIX_HOMESERVER`, `HECTOR_MATRIX_ROOM`, `HECTOR_MATRIX_TOKEN` | Matrix-Benachrichtigung bei Fehlern; leer = aus. Auch im Admin-Dashboard (Reiter „Chat“) einstellbar; das dort Gespeicherte (`/var/lib/hector9000/notify.json`) hat Vorrang |
+| `HECTOR_ADMIN_PASSWORD` | Passwort des Admin-Dashboards. Leer: der Stats-Server erzeugt beim ersten Start eines und legt es in `/var/lib/hector9000/stats/admin_password` ab (anzeigen: Wartungsmenü Punkt 7 oder `sudo hector-maint --password`) |
+| `HECTOR_ADMIN_REMOTE` | `0` = Dashboard nur vom Gerät selbst (z. B. per SSH-Tunnel); Standard: aus dem Netz erreichbar |
+| `HECTOR_MATRIX_HOMESERVER`, `HECTOR_MATRIX_ROOM`, `HECTOR_MATRIX_TOKEN` | Matrix-Benachrichtigung bei Fehlern; leer = aus. Auch im Admin-Dashboard (Reiter „Chat“) einstellbar; das dort Gespeicherte (`/var/lib/hector9000/stats/notify.json`) hat Vorrang |
+
+`HECTOR_STATE_DIR` und `HECTOR_DB` setzt die Unit selbst (`/var/lib/hector9000/stats`, `/var/lib/hector9000/hector/h9k.db`). Eine Zeile
+in `hector.env` würde das überschreiben (`EnvironmentFile=` gewinnt gegen `Environment=`) und ist deshalb in der Vorlage nicht enthalten.
 
 Echte Werte gehören nur in diese Datei auf dem Pi, **nie** ins Repository (`hector.env.example` ist nur die Vorlage).
-Nach Änderungen: `sudo systemctl restart hector-stats`.
+Nach Änderungen: `sudo systemctl restart hector-stats`. Die Datei kann nur `root` und die Gruppe `hector` lesen; der Statistikdienst
+(`hector-stats`) bekommt die Werte von systemd (`EnvironmentFile=`), nicht durch eigenes Lesen.
 
 ### 5. Starten
 
@@ -146,34 +175,55 @@ Wer den Kiosk lieber über systemd stoppen will, setzt in `HectorConfig.py`:
 (das Flag wird vorher trotzdem geschrieben; die sudoers-Regel dafür ist vorhanden.) Auch dann
 übernimmt `OnSuccess=` das Wartungsmenü.
 
-sudoers (`deploy/sudoers.d/hector9000`) erlaubt dem Benutzer `hector` **nur**: `systemctl reboot`,
-`systemctl start|stop|restart hector-kiosk` und `systemctl restart` für `hector-server`, `-controller`,
-`-led`, `-stats`. Bewusst ohne Wildcard `hector-*`: in sudoers passt `*` auch auf Leerzeichen, damit wäre
-`restart hector-x ssh.service` erlaubt.
+sudoers (`deploy/sudoers.d/hector9000`, vor dem Einspielen mit `visudo -cf` geprüft) erlaubt dem Benutzer `hector` **nur**:
+
+| Regel | Zweck |
+|---|---|
+| `systemctl reboot`, `systemctl start\|stop\|restart hector-kiosk`, `systemctl restart` für `hector-server`, `-controller`, `-led`, `-stats` | Neustart und Dienste (bewusst ohne Wildcard `hector-*`: in sudoers passt `*` auch auf Leerzeichen, damit wäre `restart hector-x ssh.service` erlaubt) |
+| `date -u -s @<genau 10 Ziffern, 1,7·10⁹ bis 1,99·10⁹>` | „Uhr stellen“ im Dashboard. Der Statistikdienst hat kein sudo; er schickt `system/setTime` über MQTT, der Controller prüft den Wert (ebenso 10 Ziffern, Bereich Nov 2023 bis Mai 2033, ein Test hält beides gleich) und ruft `date` auf. Der Pi hat keine Batterieuhr und startet offline mit der Zeit des letzten Herunterfahrens. **2033 muss der Bereich verschoben werden.** |
+| `cat /var/lib/hector9000/stats/admin_password` **als `hector-stats`** (nicht als root) | Wartungsmenü Punkt 7. Als `hector-stats` gelesen, führt ein untergeschobener Link ins Leere: `root` folgt keinen Links in Ordnern, die ein Dienstbenutzer ändern kann |
+| `/usr/local/sbin/hector-overlay status\|on\|off` | Wartungsmenü Punkt 8 (Schreibschutz) |
+
+## Schreibschutz, Stromausfall und Datenpartition
+
+Die Systempartition ist bei Stromausfall das Risiko (ext4 mit Journal übersteht das meist, aber nicht immer). Deshalb:
+
+- **Trennung:** Alles, was zur Laufzeit geschrieben wird (Datenbanken, Statistik, Passwort, Matrix-Einstellungen), liegt auf der eigenen
+  Partition `HECTORDATA` unter `/var/lib/hector9000`. Das Image legt sie an; sie wird beim ersten Start auf das Kartenende vergrößert.
+  Eingehängt wird sie per **PARTUUID** (nicht per Label: ein zweiter Datenträger oder USB-Stick mit gleichem Label könnte sonst dazwischenfunken),
+  mit `defaults,noatime,nosuid,nodev,noexec,nofail,x-systemd.device-timeout=15s`.
+- **Schreibschutz der Systempartition** (`hector-overlay`, im Image **aus**): `sudo hector-overlay on` bzw. Wartungsmenü Punkt 8, wirkt nach
+  dem nächsten Neustart. Dann ist `/` nur lesbar, jede Änderung landet im Arbeitsspeicher und ist nach dem Neustart weg. Nur `HECTORDATA` bleibt schreibbar.
+  **Voraussetzungen**, die das Werkzeug prüft: `/var/lib/hector9000` ist ein eigener Mountpunkt, die Karte-Partition ist read-write
+  eingetragen, mindestens etwa 512 MB RAM.
+- **Falle:** `raspi-config nonint enable_overlayfs` schreibt `overlayroot=tmpfs` und das Paket `overlayroot` versteht das als `recurse=1`:
+  es legt das Overlay über **alle** Dateisysteme aus der fstab, also auch über die Datenpartition. Die Daten wären bei jedem Neustart weg.
+  `hector-overlay` schreibt deshalb immer `overlayroot=tmpfs:recurse=0` an den Anfang der `cmdline.txt`; `provision.sh --overlayfs` ruft es auf.
+- **Folgen:** Änderungen an `/etc` (`hector.env`, WLAN), `apt` und `git pull` gehen bei eingeschaltetem Schreibschutz beim Neustart verloren: vorher
+  `sudo hector-overlay off`, neu starten, ändern, `on`, neu starten. journald schreibt in den Arbeitsspeicher (Begrenzung 50 MB).
+- **Ungetestet auf Hardware:** das Einschalten selbst (Kernel, initramfs, `overlayroot`-Hook). Im Image sind der Hook und das Overlay-Kernelmodul
+  vorhanden, mehr lässt sich ohne Karte nicht prüfen.
+
+Manuell (ohne Image) eine Datenpartition anlegen: Partition ans Kartenende (ext4, Label `HECTORDATA`), PARTUUID mit `sudo blkid` ablesen und eintragen:
+
+```
+PARTUUID=<aus blkid>  /var/lib/hector9000  ext4  defaults,noatime,nosuid,nodev,noexec,nofail,x-systemd.device-timeout=15s  0  2
+```
+
+Danach `sudo deploy/provision.sh --skip-apt --skip-venv` (legt `hector/` und `stats/` mit den richtigen Besitzern an) und die Daten übernehmen.
 
 ## Update und Rückweg
 
-- **Update:** `cd /opt/hector9000/backend && sudo git pull && sudo deploy/provision.sh --skip-apt` (WebUI analog mit
+- **Update:** (bei eingeschaltetem Schreibschutz erst `sudo hector-overlay off`, neu starten, danach wieder `on`)
+  `cd /opt/hector9000/backend && sudo git pull && sudo deploy/provision.sh --skip-apt` (WebUI analog mit
   `git pull` in `/opt/hector9000/webui`), danach `sudo systemctl restart hector.target`.
   Das Skript installiert Units, Skripte und Konfiguration nur neu, wenn sich der Inhalt geändert hat,
   und baut das venv nur neu, wenn sich die Requirements-Datei geändert hat.
 - **Rückweg:** Die alte SD-Karte bleibt unverändert und ist der Fallback. Zum Zurückdrehen auf der neuen
   Karte: `sudo systemctl disable --now hector.target` (die Daten in `/var/lib/hector9000` bleiben).
-- **Datenbank sichern:** `sudo cp /var/lib/hector9000/h9k.db* /pfad/` (die Dienste dürfen laufen; SQLite).
-
-## Read-only Root (Overlay-Dateisystem)
-
-Schützt die SD-Karte vor Schäden bei Stromausfall an der Bar. Alles, was im Root-Dateisystem geschrieben wird,
-ist nach dem Neustart weg, **auch die Datenbank**. Deshalb:
-
-1. Zweite Partition anlegen (ext4, Label `HECTORDATA`) und in `/etc/fstab` auf `/var/lib/hector9000` mounten:
-   `LABEL=HECTORDATA  /var/lib/hector9000  ext4  defaults,noatime  0  2`
-2. `sudo chown hector:hector /var/lib/hector9000`, Daten dorthin übernehmen.
-3. Erst **zuletzt**: `sudo ./deploy/provision.sh --skip-apt --skip-venv --overlayfs`.
-   Das Skript verweigert das, wenn `/var/lib/hector9000` kein eigener Mountpoint ist.
-   Es ruft `raspi-config nonint enable_overlayfs` auf (ungetestet; alternativ im Menü unter *Performance Options*).
-4. Updates und `provision.sh` brauchen danach `raspi-config nonint disable_overlayfs` + Neustart, sonst gehen sie beim
-   nächsten Neustart verloren. Mosquitto-Persistenz (`/var/lib/mosquitto`) und Logs liegen dann im Overlay (RAM).
+- **Datenbank sichern:** `sudo cp /var/lib/hector9000/hector/h9k.db* /pfad/` (die Dienste dürfen laufen; SQLite).
+- Im Image enthält das venv fertig gebaute Pakete, die Bauwerkzeuge (`build-essential`, `python3-dev`, `libffi-dev`) sind entfernt. Ändert ein
+  Update die Requirements, vorher `sudo apt-get install build-essential python3-dev libffi-dev` und danach wieder entfernen.
 
 ## Fehlersuche
 
@@ -233,11 +283,9 @@ Dieses Verzeichnis ändert bewusst keinen bestehenden Python-Code. Was noch fehl
    JSON-Datei (`$HECTOR_CONFIG`, Standard `/etc/hector9000/config.json`) rekursiv in `config` mischen.
    Dann reicht dort z. B. `{"hx711": {"ref": 2145}, "system": {"kiosk_exit": [...]}}`.
 2. **Datenbankpfad.** `conf/database.py` öffnet `./h9k.db`. Die Units lösen das über
-   `WorkingDirectory=/var/lib/hector9000`. Sauberer wäre `HECTOR_STATE_DIR` (wie im Stats-Server).
-3. **`Hector9000/StatsServer.py`** muss existieren (Unit `hector-stats` startet es aus dem Repo-Wurzelverzeichnis,
-   `PYTHONPATH` ist gesetzt). Erwartet: bindet auf `0.0.0.0:8080`, liest `HECTOR_STATE_DIR`,
-   `HECTOR_ADMIN_PASSWORD`, `HECTOR_MATRIX_*` aus der Umgebung, MQTT auf `localhost:1883`, und die
-   Rezept-/Zutaten-Datenbank `h9k.db` aus `$HECTOR_STATE_DIR` (dort liegt sie im schlanken Aufbau).
+   `WorkingDirectory=/var/lib/hector9000/hector`. Sauberer wäre eine Umgebungsvariable (der Stats-Server hat `HECTOR_DB`).
+3. ~~**`Hector9000/StatsServer.py`**~~ erledigt: bindet auf `0.0.0.0:8080`, liest `HECTOR_STATE_DIR`, `HECTOR_DB`,
+   `HECTOR_ADMIN_PASSWORD`, `HECTOR_MATRIX_*`, startet selbst keine Prozesse (siehe [`docs/stats.md`](../docs/stats.md)).
 4. **`requirements.txt` und `setup.py`** sind veraltet (siehe Kopf von `requirements-bookworm.txt`):
    `RPi.GPIO==0.7.0` baut nicht mehr, `board==0.0.0.post0` ist ein Platzhalter und überdeckt Blinkas `board`,
    `numpy` fehlt, obwohl `conf/hx711.py` es importiert. Nach dem Umstieg die Dateien angleichen.
@@ -247,13 +295,14 @@ Dieses Verzeichnis ändert bewusst keinen bestehenden Python-Code. Was noch fehl
    werden Theme und LED-Modus im `localStorage` einmal zurückgesetzt (anderer Ursprung).
 6. **`start.sh`** wird im schlanken Aufbau nicht benutzt (systemd ersetzt `nohup`); auf dem alten Pi bleibt es.
 7. **Pi 5** (nicht Ziel): `RPi.GPIO` durch `rpi-lgpio` ersetzen, Blinka-Neopixel läuft dort über PIO.
-8. **Härtung später:** `hector-controller` darf wegen `sudo` kein `NoNewPrivileges`/`PrivateTmp` haben. Die anderen
-   Dienste laufen mit `ProtectSystem=full`; strenger (`ProtectSystem=strict` + `ReadWritePaths=`) ist möglich.
-9. **Eine gemeinsame Vertrauensdomäne (Befund aus dem Sicherheitsreview, noch offen):** Statistikdienst (Netzwerk),
-   Chromium und Controller laufen alle als Benutzer `hector`, der `sudo`-Regeln hat und in `input` und
-   `systemd-journal` ist. Ein Fehler im Statistikdienst gäbe damit Zugriff auf `hector.env` und die sudo-Regeln.
-   Der Kiosk lädt `hector.env` deshalb schon nicht mehr. Sauber wäre ein eigener Benutzer `hector-stats` ohne Gruppen
-   und ohne sudo (nur er liest `hector.env`), mit `NoNewPrivileges`/`ProtectSystem=strict`; „Uhr stellen“ müsste dafür
-   über MQTT beim Controller laufen.
+8. **Härtung (Stand):** `hector-stats` ist mit `NoNewPrivileges`, `ProtectSystem=strict`, `CapabilityBoundingSet=` und
+   Systemaufruf-Filter abgesichert (`systemd-analyze security`: 1,8 „OK“). `hector-controller` darf wegen `sudo` kein
+   `NoNewPrivileges`/`PrivateTmp` haben. Server, Controller und LED-Dienst laufen mit `ProtectSystem=full`; strenger
+   (`ProtectSystem=strict` + `ReadWritePaths=`) ist möglich, aber auf Hardware ungetestet.
+9. ~~**Eine gemeinsame Vertrauensdomäne**~~ erledigt: Der Statistikdienst läuft als eigener Benutzer `hector-stats` (keine Gruppen
+   außer `video`, kein sudo, nur er liest `hector.env` über systemd). „Uhr stellen“ läuft über MQTT beim Controller.
+   **Restrisiko:** Wer MQTT erreicht (nur `127.0.0.1`), kann `system/setTime` mit einem plausiblen Wert senden. Im schlanken OS ist das
+   nur ein Prozess auf dem Gerät selbst; MQTT-Zugriffsrechte pro Benutzer wären nur mit Zugangsdaten für jeden Teilnehmer möglich (Mosquitto kennt
+   nur Erlaubnislisten), das wäre eine größere Umstellung (Browser-WebUI braucht dann ein Passwort im Klartext).
 10. **`HECTOR_ADMIN_REMOTE=0`** in `/etc/hector9000/hector.env` setzen, wenn das Dashboard nur per SSH-Tunnel
     erreichbar sein soll (Standard: aus dem Netz erreichbar, Klartext-HTTP).
