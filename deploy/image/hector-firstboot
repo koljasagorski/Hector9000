@@ -97,6 +97,13 @@ apply_custom_toml() {
         log "WARNING: init_config or python3-toml missing - customisation not applied"
     fi
     rm -f "$f"          # it may hold a password hash
+    # init_config -> userconf -> cancel-rename enables AND starts getty@tty1 when it renames the user.
+    # tty1 belongs to the kiosk (Conflicts=getty@tty1): undo that, and start the kiosk, which a
+    # pending getty start job would otherwise replace in this very boot.
+    if [ -d /run/systemd/system ]; then
+        systemctl disable getty@tty1.service >/dev/null 2>&1 || true
+        systemctl --no-block start hector-kiosk.service >/dev/null 2>&1 || true
+    fi
 }
 
 grow_data_partition || failed=1

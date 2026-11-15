@@ -131,6 +131,8 @@ for f in "$REPO"/deploy/systemd/*.service "$REPO"/deploy/systemd/*.target; do
 done
 cmp -s "$REPO/deploy/image/hector-firstboot.service" "$WANTS/hector-firstboot.service" && ok "unit hector-firstboot.service" || fail "hector-firstboot.service differs"
 cmp -s "$REPO/deploy/image/hector-firstboot" "$W/usr/local/sbin/hector-firstboot" && [ -x "$W/usr/local/sbin/hector-firstboot" ] && ok "hector-firstboot installed and executable" || fail "hector-firstboot missing"
+cmp -s "$REPO/deploy/image/userconfig-hector.conf" "$WANTS/userconfig.service.d/10-hector.conf" && grep -q '^ConditionPathExists=|' "$WANTS/userconfig.service.d/10-hector.conf" \
+    && ok "userconfig.service only runs with a userconf.txt (no interactive dialog on the touchscreen)" || fail "userconfig.service drop-in missing: the stock rename dialog would block the boot"
 cmp -s "$REPO/deploy/hector-overlay" "$W/usr/local/sbin/hector-overlay" && [ -x "$W/usr/local/sbin/hector-overlay" ] && ok "hector-overlay installed and executable" || fail "hector-overlay missing"
 grep -q 'overlayroot=tmpfs:recurse=0' "$W/usr/local/sbin/hector-overlay" && ok "hector-overlay uses recurse=0" || fail "hector-overlay without recurse=0"
 grep -q '^EnvironmentFile=' "$WANTS/hector-kiosk.service" && fail "the kiosk must not read hector.env" || ok "kiosk does not read hector.env (no admin password / Matrix token for Chromium)"

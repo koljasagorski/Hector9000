@@ -55,6 +55,22 @@ UNIT
 ln -sf /etc/systemd/system/qemu-test.service "$W/etc/systemd/system/multi-user.target.wants/qemu-test.service"
 sync; detach
 
+echo "==> custom.toml (as the Raspberry Pi Imager writes it) onto the boot partition of the COPY"
+mount_part 1 rw
+HASH="$(openssl passwd -6 -salt qemutest 'only-for-this-test')"     # a throw-away password for the test card
+cat > "$W/custom.toml" <<TOML
+config_version = 1
+
+[system]
+hostname = "hector-qemu"
+
+[user]
+name = "qemutester"
+password = "$HASH"
+password_encrypted = true
+TOML
+sync; detach
+
 run_phase() { # run_phase N
     local n="$1" cmdline log pid t0 elapsed
     mount_part 1 ro

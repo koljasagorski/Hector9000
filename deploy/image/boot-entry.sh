@@ -46,7 +46,7 @@ skip() {
     done
 }
 skip NetworkManager NetworkManager-wait-online wpa_supplicant bluetooth hciuart avahi-daemon \
-     rpi-eeprom-update sshswitch regenerate_ssh_host_keys userconfig hector-led hector-kiosk \
+     rpi-eeprom-update sshswitch regenerate_ssh_host_keys hector-led hector-kiosk \
      resize2fs_once rpi-display-backlight dphys-swapfile systemd-timesyncd
 
 # the hardware server cannot run without GPIO: same server, simulated hardware

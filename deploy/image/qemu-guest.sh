@@ -49,6 +49,20 @@ case "$phase" in
     [ -s /etc/hector9000/firstboot.done ] && ok "hector-firstboot finished (flag file)" || fail "no firstboot.done"
     journalctl -u hector-firstboot -o cat --no-pager | sed 's/^/        /'
     [ ! -e /etc/init.d/resize2fs_once ] && ok "no resize2fs_once" || fail "resize2fs_once present"
+    # the Imager customisation (custom.toml on the boot partition) applied by hector-firstboot
+    [ ! -e /boot/firmware/custom.toml ] && ok "custom.toml was applied and deleted (it may hold a password hash)" || fail "custom.toml is still on the boot partition"
+    [ "$(id -un 1000 2>/dev/null)" = qemutester ] && ok "the placeholder user pi became qemutester (UID 1000)" || fail "UID 1000 is '$(id -un 1000 2>/dev/null)'"
+    ! id pi >/dev/null 2>&1 && ok "no user pi any more" || fail "user pi still exists"
+    [ "$(passwd -S qemutester 2>/dev/null | awk '{print $2}')" = P ] && ok "qemutester has a password" || fail "qemutester has no usable password: $(passwd -S qemutester 2>&1)"
+    [ "$(hostname)" = hector-qemu ] && ok "hostname from custom.toml" || fail "hostname is '$(hostname)'"
+    # the stock rename dialog (VT8) must not have blocked the boot; tty1 belongs to the kiosk
+    ust="$(systemctl is-active userconfig 2>/dev/null)"
+    [ "$ust" != active ] && [ "$ust" != activating ] && ok "userconfig (rename dialog) is $ust" || fail "userconfig is $ust"
+    [ "$(systemctl is-system-running 2>/dev/null)" != starting ] && ok "boot finished ($(systemctl is-system-running 2>/dev/null))" || fail "the boot never finished (systemd is still 'starting')"
+    gst="$(systemctl is-enabled getty@tty1 2>/dev/null)"; gac="$(systemctl is-active getty@tty1 2>/dev/null)"
+    [ "$gst" != enabled ] && ok "getty@tty1 is not enabled ($gst)" || fail "getty@tty1 is enabled: it would fight the kiosk for tty1 at every boot"
+    [ "$gac" != active ] && ok "getty@tty1 is not running ($gac)" || fail "getty@tty1 is running on the kiosk's tty"
+    [ "$(systemctl show -p InactiveExitTimestampMonotonic --value hector-kiosk 2>/dev/null)" != 0 ] && ok "hector-kiosk was started (it fails here: no display)" || fail "hector-kiosk was never started"
     for u in mosquitto hector-controller hector-stats; do check "$u is active" systemctl is-active --quiet "$u"; done
     [ "$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 http://127.0.0.1:8080/healthz)" = 200 ] && ok "dashboard /healthz 200" || fail "dashboard /healthz"
     ss -ltnH | awk '{print $4}' | grep -E ':(1883|9001)$' | grep -qv '^127.0.0.1:' && fail "MQTT listens on a non-local address" || ok "MQTT listens on 127.0.0.1 only"

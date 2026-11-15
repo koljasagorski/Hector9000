@@ -25,6 +25,11 @@ systemctl is-enabled --quiet hector-firstboot 2>/dev/null; true
 journalctl -u hector-firstboot --no-pager -o cat 2>/dev/null | grep -q "done" && ok "hector-firstboot logged 'done'" || fail "hector-firstboot did not finish"
 journalctl -u hector-firstboot --no-pager -o cat 2>/dev/null | grep -E "not mounted|ERROR|WARNING" | sed 's/^/        /' | head -3
 
+# the stock "rename user" dialog (VT8) must not start: nobody can answer it on the touchscreen
+cond="$(systemctl show -p ConditionResult --value userconfig 2>/dev/null)"
+st="$(systemctl is-active userconfig 2>/dev/null)"
+{ [ "$st" != active ] && [ "$st" != activating ] && [ "$cond" != yes ]; } && ok "userconfig (rename dialog) did not start (state $st, condition $cond)" || fail "userconfig is $st (condition $cond): the dialog would block the boot"
+
 section "Who runs what"
 owner() { ps -o user= -p "$(systemctl show -p MainPID --value "$1")" 2>/dev/null | tr -d ' '; }
 [ "$(owner hector-server)" = hector ] && ok "hector-server runs as hector" || fail "hector-server runs as '$(owner hector-server)'"

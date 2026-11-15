@@ -350,6 +350,8 @@ fi
 if [ "$IMAGE" = 1 ]; then
     install_file "${DEPLOY}/image/hector-firstboot"         /usr/local/sbin/hector-firstboot              0755 || true
     install_file "${DEPLOY}/image/hector-firstboot.service" /etc/systemd/system/hector-firstboot.service 0644 || true
+    # no interactive "rename user" dialog on the touchscreen device (see the file's comment)
+    install_file "${DEPLOY}/image/userconfig-hector.conf"   /etc/systemd/system/userconfig.service.d/10-hector.conf 0644 || true
 fi
 
 for unit in "${DEPLOY}"/systemd/*.service "${DEPLOY}"/systemd/*.target; do
