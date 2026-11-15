@@ -204,6 +204,9 @@ find "$MNT/usr/share/locale" -mindepth 1 -maxdepth 1 ! -name 'de*' ! -name 'en*'
 
 log "Removing what must not be shared between cards"
 rm -f "$MNT"/etc/ssh/ssh_host_* "$MNT"/home/*/.bash_history "$MNT"/home/*/.lesshst "$MNT"/home/*/.viminfo
+# The stock SysV script resize2fs_once would grow the system partition's file system once at the first
+# boot. Here the system partition has its fixed size and the data partition is grown by hector-firstboot.
+rm -f "$MNT/etc/init.d/resize2fs_once" "$MNT"/etc/rc?.d/*resize2fs_once
 : > "$MNT/etc/machine-id"
 rm -f "$MNT/var/lib/dbus/machine-id"
 find "$MNT/var/log" -type f -exec truncate -s 0 {} + 2>/dev/null || true

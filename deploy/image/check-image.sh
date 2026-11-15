@@ -92,6 +92,7 @@ for o in nosuid nodev noexec nofail noatime; do echo "$DL" | grep -q "$o" && ok 
 [ -s "$W/etc/hostname" ] && ok "hostname: $(cat "$W/etc/hostname")" || fail "no /etc/hostname"
 [ ! -s "$W/etc/machine-id" ] && ok "machine-id is empty (made at the first boot)" || fail "machine-id is baked in"
 ! ls "$W"/etc/ssh/ssh_host_* >/dev/null 2>&1 && ok "no SSH host keys in the image" || fail "SSH host keys are baked in"
+! ls "$W/etc/init.d/resize2fs_once" "$W"/etc/rc?.d/*resize2fs_once >/dev/null 2>&1 && ok "no resize2fs_once (the system partition keeps its size)" || fail "resize2fs_once is still in the image"
 [ -z "$(find "$W/home" "$W/root" -maxdepth 2 \( -name .bash_history -o -name .lesshst -o -name .viminfo -o -name authorized_keys \) 2>/dev/null)" ] && ok "no shell history / authorized_keys" || fail "history or authorized_keys found"
 [ -z "$(find "$W/etc/NetworkManager/system-connections" -type f 2>/dev/null)" ] && ok "no Wi-Fi/network secrets (system-connections is empty)" || fail "network connections baked in"
 [ ! -s "$W/etc/wpa_supplicant/wpa_supplicant.conf" ] || ! grep -q 'psk=' "$W/etc/wpa_supplicant/wpa_supplicant.conf" 2>/dev/null && ok "no wpa_supplicant psk" || fail "wpa_supplicant.conf has a psk"
