@@ -70,11 +70,14 @@ zu `conf/HectorConfig.py`). Beispiel: `deploy/hector.env.example` (ohne echte We
 
 ## 4. Wie Updates auf den Pi kommen (offline über die SD-Karte)
 
-Der Pi war nicht verlässlich per SSH erreichbar, deshalb läuft das Update **einmalig beim nächsten Boot** von der SD-Karte:
+Der Pi war nicht verlässlich per SSH erreichbar, deshalb läuft das Update **einmalig beim nächsten Boot** von der SD-Karte.
+Skript, Bauanleitung und Test stehen in [`../deploy/sd-update/`](../deploy/sd-update/README.md) (`run.sh`, `build-payload.sh`).
+Kurzfassung:
 
 1. Karte in einen Rechner stecken; die FAT-Boot-Partition (`/boot`) ist überall lesbar und beschreibbar.
 2. Ordner `hector-update/` dorthin legen: `run.sh`, `Hector9000.bundle`, `Hector9000WebUI.bundle` (Git-Bundles der
-   beiden Branches), `VERSION` (z. B. `backend-<sha>-webui-<sha>`), `cmdline.txt.orig` (Sicherung).
+   beiden Branches), `VERSION` (z. B. `backend-<sha>-webui-<sha>`), `cmdline.txt.orig` (Sicherung). Bauen mit
+   `deploy/sd-update/build-payload.sh <Ausgabeordner>`.
 3. In `cmdline.txt` (eine einzige Zeile!) `systemd.run=…` anhängen, das `run.sh` einmal als root startet.
 4. `run.sh` stellt als Erstes `cmdline.txt` aus `cmdline.txt.orig` wieder her (nächster Boot ist normal, egal was
    danach passiert), sichert per tar-Backup, stasht lokale Änderungen, holt die Bundles, legt Dienste an und rollt
@@ -86,7 +89,7 @@ Läufe bisher: **Lauf 1** (Kongress-UI, Kiosk-Autostart) erfolgreich. **Lauf 2**
 sein Ergebnis steht im `update.log` auf der Karte und ist noch nicht ausgewertet. **Lauf 3** (Doom, Statistik,
 Ereignisse, `kiosk.sh` mit lokalem HTTP-Server) ist gebaut und im Container (Debian Bullseye, Python 3.9) als Kette
 Lauf 2 → Lauf 3 geprüft, aber noch nicht auf dem echten Pi ausgeführt. Was Lauf 3 zusätzlich zu den Repos tut
-(Abschnitt 7 in `run.sh`):
+(Abschnitt 7 in `deploy/sd-update/run.sh`):
 
 * legt `/var/lib/hector9000` an und eine **eigene** Unit `hector9000-stats.service` (Benutzer = Besitzer des Repos,
   Port 8080, `HECTOR_DB=<Repo>/h9k.db`); `start.sh` wird nicht angefasst;
@@ -96,7 +99,8 @@ Lauf 2 → Lauf 3 geprüft, aber noch nicht auf dem echten Pi ausgeführt. Was L
   man es ohne SSH lesen kann. **Die Datei nach dem Lesen löschen** (die FAT-Partition ist für jeden lesbar, der die Karte
   hat); im `update.log` steht das Passwort nicht. Auf dem Pi liegt es in `/var/lib/hector9000/admin_password` (0600);
 * braucht etwa 15 MB (Bundles) plus den Platz im Repo (Freedoom-WAD 29 MB, Wasm); die Boot-Partition muss die Bundles
-  fassen, die Repos liegen auf der Root-Partition.
+  fassen, die Repos liegen auf der Root-Partition. Der zuletzt gebaute Payload liegt auf dem Rechner des Maintainers
+  (`~/Documents/Hector9000-SD-Lauf3/`, mit `ANLEITUNG.txt`); er ist nicht im Repo, weil er Bundles enthält.
 
 Nach dem Boot: `http://<ip>:8080/` (öffentlich) und `http://<ip>:8080/admin` (Login `admin`). Der Cocktail „Doom“ ist
 im WebUI immer da (virtueller Eintrag, falls das Backend keinen liefert).

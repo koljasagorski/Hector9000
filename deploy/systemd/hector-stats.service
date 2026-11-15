@@ -21,8 +21,9 @@ ExecStart=/opt/hector9000/venv/bin/python Hector9000/StatsServer.py
 Restart=on-failure
 RestartSec=5
 # a flood of connections from the Wi-Fi must not take the machine down with it
+# (32 simultaneous requests = 32 handler threads + 32 deadline timers, plus a few service threads)
 MemoryMax=200M
-TasksMax=64
+TasksMax=160
 LimitNOFILE=256
 OOMScoreAdjust=500
 # no NoNewPrivileges: the admin action "set clock" uses sudo (see sudoers.d/hector9000)
