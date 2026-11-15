@@ -136,8 +136,11 @@ def running_processes(expected=None):
 def git_revision(path):
     if not path or not os.path.isdir(path):
         return None
-    rev = _run(["git", "-C", path, "rev-parse", "--short", "HEAD"])
-    branch = _run(["git", "-C", path, "rev-parse", "--abbrev-ref", "HEAD"])
+    # read-only questions about a checkout that belongs to another user (e.g. root in /opt):
+    # git refuses that ("dubious ownership") unless the directory is declared safe on the command line
+    git = ["git", "-c", "safe.directory=" + os.path.abspath(path), "-C", path]
+    rev = _run(git + ["rev-parse", "--short", "HEAD"])
+    branch = _run(git + ["rev-parse", "--abbrev-ref", "HEAD"])
     return {"rev": rev, "branch": branch} if rev else None
 
 

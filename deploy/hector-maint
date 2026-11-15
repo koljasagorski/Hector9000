@@ -8,6 +8,7 @@
 # Non-interactive helpers (also used by the tests):
 #   hector-maint --ips       print IP addresses
 #   hector-maint --status    print service states
+#   hector-maint --password  print the admin dashboard password
 #
 set -u
 
@@ -58,6 +59,20 @@ logs() {
     journalctl -u "$unit" -n 40 --no-pager 2>&1 || echo "(journalctl nicht erlaubt)"
 }
 
+password() {
+    echo "Admin-Dashboard: http://$(hostname -I 2>/dev/null | awk '{print $1}'):8080/admin"
+    echo "Benutzer: admin"
+    local pw
+    if pw="$($SUDO cat /var/lib/hector9000/stats/admin_password 2>/dev/null)" && [ -n "$pw" ]; then
+        echo "Passwort: $pw"
+        echo
+        echo "(Ändern: HECTOR_ADMIN_PASSWORD in /etc/hector9000/hector.env, dann hector-stats neu starten.)"
+    else
+        echo "Passwort: noch keines (der Statistikdienst legt es beim ersten Start an) oder per"
+        echo "HECTOR_ADMIN_PASSWORD in /etc/hector9000/hector.env festgelegt."
+    fi
+}
+
 pause() {
     echo
     read -rsn1 -p "[Taste drücken]" _
@@ -77,6 +92,7 @@ menu() {
         echo "  4) Logs ansehen"
         echo "  5) Hector-Dienste neu starten"
         echo "  6) Neustart"
+        echo "  7) Admin-Passwort anzeigen"
         echo
         echo "  Konsole mit Login: USB-Tastatur Strg+Alt+F2"
         echo
@@ -109,6 +125,7 @@ menu() {
                     sleep 30
                 fi
                 ;;
+            7) password; pause ;;
         esac
     done
 }
@@ -116,6 +133,7 @@ menu() {
 case "${1:-}" in
     --ips) ips ;;
     --status) status ;;
+    --password) password ;;
     "") menu ;;
-    *) echo "usage: hector-maint [--ips|--status]" >&2; exit 2 ;;
+    *) echo "usage: hector-maint [--ips|--status|--password]" >&2; exit 2 ;;
 esac

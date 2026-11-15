@@ -91,7 +91,7 @@ cmd_import() {
     if pgrep -u "$HECTOR_USER" >/dev/null 2>&1; then
         die "processes are still running as $HECTOR_USER ($(pgrep -u "$HECTOR_USER" -l | head -c 200 | tr '\n' ' ')) - stop them (pkill -u $HECTOR_USER) and run again"
     fi
-    install -d -m 0750 -o "$HECTOR_USER" -g "$HECTOR_USER" "$STATE_DIR"
+    install -d -m 0751 -o "$HECTOR_USER" -g "$HECTOR_USER" "$STATE_DIR"
     # $STATE_DIR belongs to the service user, but this script writes there as root. A symbolic
     # link planted by that user would redirect root's writes (backup copies) to any file.
     if [ -n "$(find "$STATE_DIR" -maxdepth 1 -type l -print -quit)" ]; then
@@ -110,7 +110,8 @@ cmd_import() {
             cp -p --no-dereference "$STATE_DIR/$base" "$STATE_DIR/$base.bak-$ts"
             echo "saved existing $base as $base.bak-$ts"
         fi
-        install -m 0640 -o "$HECTOR_USER" -g "$HECTOR_USER" "$f" "$STATE_DIR/$base"
+        # 0644: the statistics service (own user) reads the bottle names; the file holds recipes, no secrets
+        install -m 0644 -o "$HECTOR_USER" -g "$HECTOR_USER" "$f" "$STATE_DIR/$base"
         echo "database: $STATE_DIR/$base"
     done
 

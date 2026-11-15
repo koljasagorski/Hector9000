@@ -15,6 +15,7 @@ class APITopics:
     closeAllValves = "closeAllValves"
     reboot = "system/reboot"
     kioskExit = "system/kioskExit"
+    setTime = "system/setTime"          # payload: epoch seconds (admin dashboard "set clock")
 
 class HardwareTopics:
     light_on = "light_on"

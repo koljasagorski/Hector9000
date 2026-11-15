@@ -1,20 +1,28 @@
 #!/usr/bin/env python3
 # -*- coding: utf8 -*-
 ##
-#   HectorSystem.py       System actions (reboot, leave kiosk fullscreen)
-#                         triggered from the WebUI via MQTT.
+#   HectorSystem.py       System actions (reboot, leave kiosk fullscreen, set the
+#                         clock) triggered from the WebUI / admin dashboard via MQTT.
 #
 #   The commands are fixed argv lists from the config. The MQTT payload is
-#   never passed to a command, and retained messages are ignored so a
-#   leftover retained "reboot" on the broker cannot cause a reboot loop.
+#   never passed to a command (the one exception, the clock, is parsed into an
+#   integer first), and retained messages are ignored so a leftover retained
+#   "reboot" on the broker cannot cause a reboot loop.
 #
 
 import os
+import re
 import stat
 import subprocess
 
 REBOOT = "reboot"
 KIOSK_EXIT = "kiosk_exit"
+SET_TIME = "set_time"
+
+# "Set clock" accepts exactly ten digits of epoch seconds in this range. It must match the
+# pattern in deploy/sudoers.d/hector9000 (@1[7-9] + 8 digits, Nov 2023 .. May 2033); a test
+# keeps them in step. In 2033 both have to be moved on.
+SET_TIME_MIN, SET_TIME_MAX = 1700000000, 1999999999
 
 # Contract with Hector9000WebUI/kiosk.sh: the kiosk launcher stops relaunching
 # Chromium once this flag file exists, and every kiosk Chromium process carries
@@ -29,7 +37,21 @@ DEFAULT_COMMANDS = {
     REBOOT: ["sudo", "-n", "systemctl", "reboot"],
     # The exit flag is written by write_kiosk_exit_flag() before this runs.
     KIOSK_EXIT: ["pkill", "-f", KIOSK_PROFILE_MARKER],
+    # {epoch} is replaced by an integer that was checked against the range above.
+    # The Pi has no battery clock: without network it starts with the time of the last shutdown.
+    SET_TIME: ["sudo", "-n", "date", "-u", "-s", "@{epoch}"],
 }
+
+
+def parse_epoch(payload):
+    """Epoch seconds from an MQTT payload, or None unless it is exactly ten ASCII digits in range."""
+    if isinstance(payload, (bytes, bytearray)):
+        payload = bytes(payload).decode("ascii", "replace")
+    match = re.fullmatch(r"[0-9]{10}", str(payload).strip())
+    if not match:
+        return None
+    value = int(match.group())
+    return value if SET_TIME_MIN <= value <= SET_TIME_MAX else None
 
 
 def write_kiosk_exit_flag(path=KIOSK_EXIT_FLAG):
@@ -113,4 +135,22 @@ class HectorSystem:
             return True
         except Exception as e:  # never take the controller down
             self.log("System: '%s' failed: %s" % (action, e))
+            return False
+
+    def set_time(self, payload, retained=False):
+        """Set the system clock to the epoch in ``payload``. Returns True if the command was started."""
+        if retained:
+            self.log("System: ignoring retained 'set_time' message")
+            return False
+        epoch = parse_epoch(payload)
+        template = self.commands.get(SET_TIME)
+        if epoch is None or not template:
+            self.log("System: 'set_time' refused (payload not a plausible epoch, or no command)")
+            return False
+        try:
+            self.log("System: setting the clock")
+            self.runner([part.replace("{epoch}", str(epoch)) for part in template])
+            return True
+        except Exception as e:
+            self.log("System: 'set_time' failed: %s" % e)
             return False

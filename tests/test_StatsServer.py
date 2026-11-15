@@ -55,8 +55,7 @@ def app(web):
     recorder = StatsRecorder(store, on_error=lambda l, s, m: notifier.notify(l, m, source=s))
     published = []
     a = SS.StatsApp(store, recorder, notifier, lambda t, p, r=False: published.append((t, p, r)),
-                    "s3cret", health=lambda: {"cpu_temp": 50.0}, clock=clock, web_dir=web,
-                    set_time_cmd=["true"])
+                    "s3cret", health=lambda: {"cpu_temp": 50.0}, clock=clock, web_dir=web)
     a.published, a.backend, a.clock_obj = published, backend, clock
     a.watchdog = Watchdog(notifier.notify, notifier.resolve, None)
     return a
@@ -182,6 +181,7 @@ def test_dangerous_actions_wait_while_a_drink_is_made(app):
     app.recorder.live = {"state": "dosing", "drink": "x", "progress": 1, "since": 1}
     for action in ("clean", "dry", "reboot", "open_valves"):
         assert post(app, {"action": action})[0] == 409
+    assert post(app, {"action": "set_time", "epoch": int(app.clock())})[0] == 409
     assert app.published == []
     assert post(app, {"action": "close_valves"})[0] == 200      # closing is always fine
 
@@ -213,12 +213,27 @@ def test_test_notification_goes_through_the_notifier(app):
     assert "Test" in app.backend.sent[0]
 
 
-def test_set_time_validates_range_and_runs_the_command(app):
+def test_set_time_validates_the_range_and_asks_the_controller_over_mqtt(app):
     assert post(app, {"action": "set_time", "epoch": 1})[0] == 400
     assert post(app, {"action": "set_time", "epoch": "x"})[0] == 400
-    assert post(app, {"action": "set_time", "epoch": int(app.clock())})[0] == 200
-    app.set_time_cmd = ["false"]
-    assert post(app, {"action": "set_time", "epoch": int(app.clock())})[0] == 500
+    assert app.published == []
+    epoch = int(app.clock())
+    assert post(app, {"action": "set_time", "epoch": epoch})[0] == 200
+    # not retained, so a restarted controller cannot replay an old clock value
+    assert app.published == [("Hector9000/system/setTime", str(epoch), False)]
+    assert [e["kind"] for e in app.store.recent_events(1)] == ["admin"]
+
+
+def test_the_stats_service_has_no_way_to_run_commands():
+    """Part of the trust split: StatsServer.py itself must not start processes (the controller does;
+    the fixed read-only probes such as ps and vcgencmd live in SystemHealth)."""
+    import ast
+    tree = ast.parse(open(SS.__file__, encoding="utf-8").read())
+    imported = {a.name.split(".")[0] for n in ast.walk(tree) if isinstance(n, ast.Import) for a in n.names}
+    imported |= {n.module.split(".")[0] for n in ast.walk(tree) if isinstance(n, ast.ImportFrom) and n.module}
+    assert not imported & {"subprocess", "pty", "pexpect"}
+    calls = {n.func.attr for n in ast.walk(tree) if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)}
+    assert not calls & {"system", "popen", "execv", "execvp", "spawnv", "fork", "Popen", "check_output"}
 
 
 def test_error_events_reach_the_chat_once(app):
@@ -317,6 +332,8 @@ def test_sudoers_clock_rule_matches_the_python_range():
         text = f.read()
     assert "@1[7-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]" in text
     assert SS.SET_TIME_MIN == 1700000000 and SS.SET_TIME_MAX == 1999999999
+    from Hector9000.utils import HectorSystem
+    assert (HectorSystem.SET_TIME_MIN, HectorSystem.SET_TIME_MAX) == (1700000000, 1999999999)
 
 
 def test_short_configured_admin_password_is_warned_about(tmp_path, capsys):
@@ -373,7 +390,10 @@ def test_connection_limit_answers_503_instead_of_piling_up_threads(live):
         """Ask until the answer starts with prefix (the server thread may need a moment under load)."""
         deadline = time.time() + seconds
         while True:
-            reply = _raw_request(port, b"GET /healthz HTTP/1.0\r\n\r\n")
+            try:
+                reply = _raw_request(port, b"GET /healthz HTTP/1.0\r\n\r\n")
+            except ConnectionError:       # a rejected client may get a reset instead of the 503: ask again
+                reply = b""
             if reply.startswith(prefix) or time.time() > deadline:
                 return reply
             time.sleep(0.1)

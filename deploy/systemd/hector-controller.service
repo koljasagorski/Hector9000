@@ -13,7 +13,7 @@ WorkingDirectory=/var/lib/hector9000
 StateDirectory=hector9000
 Environment=PYTHONPATH=/opt/hector9000/backend
 Environment=PYTHONUNBUFFERED=1
-EnvironmentFile=-/etc/hector9000/hector.env
+# no hector.env: it holds the admin password and the Matrix token, only hector-stats.service needs them
 ExecStart=/opt/hector9000/venv/bin/python /opt/hector9000/backend/Hector9000/HectorController.py
 Restart=on-failure
 RestartSec=3

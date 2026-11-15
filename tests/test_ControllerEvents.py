@@ -115,3 +115,43 @@ def test_event_builders_clip_text_and_validate_status():
     assert Events.parse(b"[1,2]") is None
     assert Events.parse("{" + '"a":' * 100000) is None
     assert Events.parse('{"a": 1}') == {"a": 1}
+
+
+# ------------------------------------------------------------------ set clock --
+class Runner:
+    def __init__(self):
+        self.calls = []
+
+    def __call__(self, argv):
+        self.calls.append(argv)
+
+
+def test_set_time_topic_sets_the_clock_and_answers_ok(controller):
+    from Hector9000.utils import HectorSystem
+    runner = Runner()
+    controller.system = HectorSystem.HectorSystem(runner=runner, log=lambda m: None)
+    controller.on_message(None, None, Msg("Hector9000/system/setTime", b"1790000000"))
+    assert runner.calls == [["sudo", "-n", "date", "-u", "-s", "@1790000000"]]
+    assert ("Hector9000/system/setTime/return", "ok", False) in controller.client.sent
+    assert controller.client.events(Events.TOPIC_ERROR) == []
+
+
+def test_set_time_with_a_bad_payload_runs_nothing_and_reports_a_warning(controller):
+    from Hector9000.utils import HectorSystem
+    runner = Runner()
+    controller.system = HectorSystem.HectorSystem(runner=runner, log=lambda m: None)
+    controller.on_message(None, None, Msg("Hector9000/system/setTime", b"1790000000; reboot"))
+    assert runner.calls == []
+    assert ("Hector9000/system/setTime/return", "error", False) in controller.client.sent
+    err = controller.client.events(Events.TOPIC_ERROR)
+    assert len(err) == 1 and err[0]["source"] == "system" and err[0]["level"] == "warning"
+
+
+def test_retained_set_time_is_ignored_silently(controller):
+    from Hector9000.utils import HectorSystem
+    runner = Runner()
+    controller.system = HectorSystem.HectorSystem(runner=runner, log=lambda m: None)
+    msg = Msg("Hector9000/system/setTime", b"1790000000")
+    msg.retain = True
+    controller.on_message(None, None, msg)
+    assert runner.calls == [] and controller.client.events(Events.TOPIC_ERROR) == []

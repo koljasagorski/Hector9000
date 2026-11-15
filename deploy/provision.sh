@@ -19,6 +19,8 @@
 #   --start             start the services right away (takes over tty1!)
 #   --overlayfs         enable the read-only root overlay at the very end
 #                       (refuses unless /var/lib/hector9000 is its own mount)
+#   --image             building a disk image (chroot): no running systemd needed,
+#                       units are only enabled, nothing is started or restarted
 #   --skip-apt          do not run apt-get (packages already installed)
 #   --skip-venv         do not (re)build the Python virtualenv
 #   --no-systemd        copy the unit files but never call systemctl
@@ -31,8 +33,12 @@ set -euo pipefail
 # ------------------------------------------------------------------ defaults
 HECTOR_USER="hector"
 HECTOR_GROUPS=(gpio i2c spi video render input systemd-journal)
+# The web-facing statistics service gets its own account: no groups, no sudo, no login. It reads
+# nothing of the hardware side except the (world-readable) recipe database.
+STATS_USER="hector-stats"
 PREFIX="/opt/hector9000"
-STATE_DIR="/var/lib/hector9000"
+STATE_DIR="/var/lib/hector9000"            # hardware side: h9k.db (owner hector)
+STATS_DIR="${STATE_DIR}/stats"             # stats.db, admin password, notify.json (owner hector-stats)
 ETC_DIR="/etc/hector9000"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -47,6 +53,7 @@ REQUIREMENTS=""
 DRY_RUN=0
 USE_SYSTEMD=1
 OVERLAYFS=0
+IMAGE=0
 START=0
 SKIP_APT=0
 SKIP_VENV=0
@@ -129,6 +136,7 @@ while [ "$#" -gt 0 ]; do
         --requirements)  need_arg "$@"; REQUIREMENTS="$2"; shift ;;
         --start)         START=1 ;;
         --overlayfs)     OVERLAYFS=1 ;;
+        --image)         IMAGE=1; USE_SYSTEMD=1 ;;
         --skip-apt)      SKIP_APT=1 ;;
         --skip-venv)     SKIP_VENV=1 ;;
         --no-systemd)    USE_SYSTEMD=0 ;;
@@ -161,8 +169,8 @@ esac
     warn "written for bookworm, found '${VERSION_CODENAME:-?}' - package names may differ"
 ARCH="$(dpkg --print-architecture 2>/dev/null || uname -m)"
 info "${PRETTY_NAME:-?} / ${ARCH} / dry-run=${DRY_RUN} systemd=${USE_SYSTEMD}"
-if [ "$USE_SYSTEMD" = 1 ] && [ ! -d /run/systemd/system ] && [ "$DRY_RUN" = 0 ]; then
-    die "systemd is not running here - use --no-systemd (container/chroot)"
+if [ "$USE_SYSTEMD" = 1 ] && [ "$IMAGE" = 0 ] && [ ! -d /run/systemd/system ] && [ "$DRY_RUN" = 0 ]; then
+    die "systemd is not running here - use --no-systemd (container) or --image (chroot while building an image)"
 fi
 
 # ------------------------------------------------------------------ 1. apt
@@ -223,12 +231,35 @@ else
     info "creating user (no password, login only via sudo/su)"
     run useradd --create-home --shell /bin/bash --groups "$groups_csv" "$HECTOR_USER"
 fi
+log "User ${STATS_USER} (statistics service, no groups, no login)"
+if id -u "$STATS_USER" >/dev/null 2>&1; then
+    info "user exists"
+else
+    run useradd --system --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin "$STATS_USER"
+fi
 
 # --------------------------------------------------------------- 4. dirs
 log "Directories"
 run install -d -m 0755 "$PREFIX"
-run install -d -m 0750 -o "$HECTOR_USER" -g "$HECTOR_USER" "$STATE_DIR"
-run install -d -m 0750 -o root -g "$HECTOR_USER" "$ETC_DIR"
+# STATE_DIR is traversable (x) for others so that the statistics service can reach its own
+# subdirectory and read the recipe database; nobody but hector can list or write it.
+run install -d -m 0751 -o "$HECTOR_USER" -g "$HECTOR_USER" "$STATE_DIR"
+run install -d -m 0750 -o "$STATS_USER" -g "$STATS_USER" "$STATS_DIR"
+# before the statistics service had its own user, its files lived in STATE_DIR: move them
+if [ "$DRY_RUN" = 0 ]; then
+    for f in stats.db stats.db-wal stats.db-shm admin_password notify.json; do
+        if [ -f "${STATE_DIR}/${f}" ] && [ ! -e "${STATS_DIR}/${f}" ]; then
+            info "move: ${STATE_DIR}/${f} -> ${STATS_DIR}/"
+            mv "${STATE_DIR}/${f}" "${STATS_DIR}/${f}"
+            chown "$STATS_USER:$STATS_USER" "${STATS_DIR}/${f}"
+        fi
+    done
+    # the recipe database may be read by the statistics service (bottle names)
+    for f in "${STATE_DIR}"/h9k.db*; do [ -f "$f" ] && chmod o+r "$f"; done
+fi
+# /etc/hector9000 is readable by everybody (config.json for the hardware services); only the
+# secrets file hector.env is private to the statistics service
+run install -d -m 0755 -o root -g root "$ETC_DIR"
 link_dir "$BACKEND_SRC" "${PREFIX}/backend"
 
 if [ -n "$WEBUI_SRC" ]; then
@@ -248,10 +279,10 @@ fi
 
 if [ ! -e "${ETC_DIR}/hector.env" ]; then
     info "create ${ETC_DIR}/hector.env from the template (edit it for admin password / Matrix)"
-    run install -m 0640 -o root -g "$HECTOR_USER" "${DEPLOY}/hector.env.example" "${ETC_DIR}/hector.env"
+    run install -m 0640 -o root -g "$STATS_USER" "${DEPLOY}/hector.env.example" "${ETC_DIR}/hector.env"
 else
     info "keep existing ${ETC_DIR}/hector.env"
-    run chown root:"$HECTOR_USER" "${ETC_DIR}/hector.env"
+    run chown root:"$STATS_USER" "${ETC_DIR}/hector.env"
     run chmod 0640 "${ETC_DIR}/hector.env"
 fi
 

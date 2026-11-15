@@ -248,6 +248,14 @@ class HectorController:
         ok = self.system.handle(action, retained=bool(getattr(msg, "retain", False)))
         self.client.publish(self.get_returnTopic(msg.topic), "ok" if ok else "error")
 
+    def _do_set_time(self, msg):
+        retained = bool(getattr(msg, "retain", False))
+        ok = self.system.set_time(msg.payload, retained=retained)
+        self.client.publish(self.get_returnTopic(msg.topic), "ok" if ok else "error")
+        if not ok and not retained:
+            self._publish_event(Events.TOPIC_ERROR, Events.error_event(
+                "system", "Uhr stellen fehlgeschlagen", level="warning"))
+
     def dose_callback(self, progress):
         self.client.publish(self.TopicPrefix + "doseDrink/progress", progress)
 
@@ -308,6 +316,8 @@ class HectorController:
                 self._do_system_action(msg, HectorSystem.REBOOT)
             elif currentTopic == self.TopicPrefix + mqttTopics.APITopics.kioskExit:
                 self._do_system_action(msg, HectorSystem.KIOSK_EXIT)
+            elif currentTopic == self.TopicPrefix + mqttTopics.APITopics.setTime:
+                self._do_set_time(msg)
             else:
                 warning("unknown topic: " + currentTopic +
                         ", msg " + str(msg.payload))

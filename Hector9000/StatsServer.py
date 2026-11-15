@@ -46,7 +46,6 @@ import os
 import secrets
 import socket
 import sqlite3
-import subprocess
 import sys
 import tempfile
 import threading
@@ -60,7 +59,7 @@ _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
-from Hector9000.utils import Events, Notifier, NotifySettings, SystemHealth  # noqa: E402
+from Hector9000.utils import Events, HectorSystem, Notifier, NotifySettings, SystemHealth  # noqa: E402
 from Hector9000.utils.StatsRecorder import StatsRecorder  # noqa: E402
 from Hector9000.utils.StatsStore import StatsStore  # noqa: E402
 from Hector9000.utils.Watchdog import Watchdog  # noqa: E402
@@ -76,8 +75,9 @@ TRUST_S = 3600               # an address that logged in successfully is exempt 
 MAX_CONNECTIONS = 32         # simultaneous HTTP requests, more get a 503
 REQUEST_DEADLINE = 30        # seconds for one whole request, however slowly it is sent
 MIN_PASSWORD_LENGTH = 12
-# "Set clock": must match the pattern in deploy/sudoers.d/hector9000 (@1[7-9] + 8 digits)
-SET_TIME_MIN, SET_TIME_MAX = 1700000000, 1999999999      # Nov 2023 .. May 2033
+# "Set clock" is done by the controller (it may use sudo, this service may not): the range is
+# defined once in HectorSystem and matches deploy/sudoers.d/hector9000
+SET_TIME_MIN, SET_TIME_MAX = HectorSystem.SET_TIME_MIN, HectorSystem.SET_TIME_MAX
 LED_MODES = ("theme", "random", "idle", "off")
 
 CONTENT_TYPES = {
@@ -98,9 +98,8 @@ MQTT_ACTIONS = {
     "open_valves": ("Hector9000/openAllValves", "true", False),
     "close_valves": ("Hector9000/closeAllValves", "true", False),
 }
-BUSY_BLOCKS = ("clean", "dry", "open_valves", "reboot")   # not while a drink is being made
-
-DEFAULT_SET_TIME = ["sudo", "-n", "date", "-u", "-s", "@{epoch}"]
+TOPIC_SET_TIME = "Hector9000/system/setTime"
+BUSY_BLOCKS = ("clean", "dry", "open_valves", "reboot", "set_time")   # not while a drink is being made
 
 
 def log(message):
@@ -176,7 +175,7 @@ class StatsApp:
     """All behaviour of the service without sockets, so it can be tested directly."""
 
     def __init__(self, store, recorder, notifier, publish, admin_password, health=None,
-                 bottle_names=None, backend_dir=REPO_DIR, webui_dir=None, set_time_cmd=None,
+                 bottle_names=None, backend_dir=REPO_DIR, webui_dir=None,
                  clock=time.time, web_dir=WEB_DIR, admin_remote=True, state_dir=None, env=None):
         self.store, self.recorder, self.notifier = store, recorder, notifier
         self.state_dir = state_dir            # where notify.json lives; None = settings not editable
@@ -187,7 +186,6 @@ class StatsApp:
         self.health = health or SystemHealth.snapshot
         self.bottle_names = bottle_names or (lambda: {})
         self.backend_dir, self.webui_dir = backend_dir, webui_dir
-        self.set_time_cmd = set_time_cmd or DEFAULT_SET_TIME
         self.clock = clock
         self.web_dir = web_dir
         self._cache = (0, None)
@@ -430,13 +428,8 @@ class StatsApp:
             return self._json({"ok": False, "error": "epoch fehlt"}, 400)
         if not SET_TIME_MIN <= epoch <= SET_TIME_MAX:
             return self._json({"ok": False, "error": "unplausible Uhrzeit"}, 400)
-        cmd = [part.replace("{epoch}", str(epoch)) for part in self.set_time_cmd]
-        try:
-            res = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
-        except (OSError, subprocess.SubprocessError) as e:
-            return self._json({"ok": False, "error": "Uhr konnte nicht gestellt werden: %s" % e}, 500)
-        if res.returncode != 0:
-            return self._json({"ok": False, "error": (res.stderr or "Befehl fehlgeschlagen").strip()[:200]}, 500)
+        # this service has no sudo (and no NoNewPrivileges exception): the controller does it
+        self.publish(TOPIC_SET_TIME, str(epoch), False)
         self.store.add_event(epoch, "admin", "set_time (war %d s daneben)" % int(epoch - now))
         return self._json({"ok": True})
 

@@ -103,3 +103,37 @@ def test_default_runner_reports_failing_command():
 def test_default_runner_reports_started_command():
     system = hs.HectorSystem(commands={hs.REBOOT: ["true"]}, log=lambda m: None)
     assert system.handle(hs.REBOOT) is True
+
+
+# ------------------------------------------------------------------ set clock --
+def test_set_time_runs_date_with_a_checked_integer():
+    runner = FakeRunner()
+    assert make(runner).set_time(b"1790000000") is True
+    assert runner.calls == [["sudo", "-n", "date", "-u", "-s", "@1790000000"]]
+
+
+def test_set_time_refuses_everything_but_ten_digits_in_range():
+    for bad in (b"", b"abc", b"1790000000; reboot", b"$(reboot)", b"1790000000\n@1", b"-1790000000",
+                b"17900000000", b"179000000", b"1699999999", b"2000000000", "١٧٩٠٠٠٠٠٠٠".encode(), b"\xff\xfe"):
+        runner = FakeRunner()
+        assert make(runner).set_time(bad) is False, bad
+        assert runner.calls == []
+    runner = FakeRunner()
+    assert make(runner).set_time(b" 1790000000\n") is True        # surrounding whitespace is fine
+    assert runner.calls[0][-1] == "@1790000000"
+
+
+def test_set_time_ignores_retained_messages_and_reports_failures():
+    runner = FakeRunner()
+    assert make(runner).set_time(b"1790000000", retained=True) is False
+    assert runner.calls == []
+    assert make(FakeRunner(fail=True)).set_time(b"1790000000") is False
+    assert make(runner, commands={hs.SET_TIME: []}).set_time(b"1790000000") is False
+
+
+def test_set_time_range_matches_the_sudoers_rule():
+    path = os.path.join(os.path.dirname(__file__), "..", "deploy", "sudoers.d", "hector9000")
+    text = open(path).read()
+    assert "@1[7-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]" in text         # 10 digits, 1.7e9 .. 1.99e9
+    assert hs.parse_epoch("1700000000") == 1700000000 and hs.parse_epoch("1999999999") == 1999999999
+    assert hs.parse_epoch("1699999999") is None and hs.parse_epoch("2000000000") is None

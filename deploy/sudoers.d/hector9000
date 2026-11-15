@@ -13,12 +13,18 @@ Cmnd_Alias HECTOR_CTL = \
     /usr/bin/systemctl restart hector-stats, \
     /usr/bin/systemctl restart hector-kiosk
 
-# Admin dashboard "set clock" (StatsServer.py, action set_time): exactly ten digits
-# of epoch seconds, 1.7e9 .. 1.99e9 (Nov 2023 .. May 2033), nothing else can be appended.
-# Needed because the Pi has no battery clock and starts with the time of the last
-# shutdown when offline. Keep in sync with SET_TIME_MIN/MAX in StatsServer.py (a test
-# checks this); in 2033 this range has to be moved on.
+# Admin dashboard "set clock": the statistics service (which has no sudo) publishes the
+# time on MQTT and the controller (this user) runs `date` - exactly ten digits of epoch
+# seconds, 1.7e9 .. 1.99e9 (Nov 2023 .. May 2033), nothing else can be appended. Needed
+# because the Pi has no battery clock and starts with the time of the last shutdown when
+# offline. Keep in sync with SET_TIME_MIN/MAX in utils/HectorSystem.py (a test checks this);
+# in 2033 this range has to be moved on.
 Cmnd_Alias HECTOR_CLOCK = \
     /usr/bin/date -u -s @1[7-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]
 
-hector ALL=(root) NOPASSWD: HECTOR_CTL, HECTOR_CLOCK
+# Maintenance menu on the machine's own console: show the admin password that the
+# statistics service generated on its first start (fixed file, no argument that can change).
+Cmnd_Alias HECTOR_SHOWPW = \
+    /usr/bin/cat /var/lib/hector9000/stats/admin_password
+
+hector ALL=(root) NOPASSWD: HECTOR_CTL, HECTOR_CLOCK, HECTOR_SHOWPW
