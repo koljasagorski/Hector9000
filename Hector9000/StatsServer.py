@@ -378,12 +378,11 @@ class StatsApp:
         cfg["editable"] = bool(self.state_dir)
         return cfg
 
-    def _apply_notify(self, settings):
-        """Build the backends for these settings (None = environment only) and swap them in.
-        Raises ValueError if they cannot be built; nothing changes in that case."""
+    def _build_notify(self, settings):
+        """The backends and level for these settings (None = environment only).
+        Raises ValueError if they cannot be built. Nothing is changed yet."""
         merged = NotifySettings.merge_env(self.env, settings)
-        backends = Notifier.backends_from_env(merged)
-        self.notifier.reconfigure(backends, merged.get("HECTOR_NOTIFY_LEVEL", "warning"))
+        return Notifier.backends_from_env(merged), merged.get("HECTOR_NOTIFY_LEVEL", "warning")
 
     def _notify_action(self, name, args, now):
         if not self.state_dir:
@@ -401,19 +400,22 @@ class StatsApp:
                 return self._json({"ok": True})
             try:
                 if name == "reset_notify":
-                    self._apply_notify(None)             # may refuse: then the file stays as it is
+                    backends, level = self._build_notify(None)      # may refuse: nothing has changed yet
                     NotifySettings.delete(self.state_dir)
+                    self.notifier.reconfigure(backends, level)
                     self.store.add_event(now, "admin", "reset_notify")
                     return self._json({"ok": True, "config": self.notify_config()})
                 current = dict(NotifySettings.load(self.state_dir) or {})
-                if not current.get("token"):          # set up in hector.env so far: keep that token
+                if not current.get("token"):          # set up in hector.env so far: that token and its server
                     current["token"] = self.env.get("HECTOR_MATRIX_TOKEN", "")
+                    current["homeserver"] = self.env.get("HECTOR_MATRIX_HOMESERVER", "")
                 clean, error = NotifySettings.validate(
                     args, current, allow_http=self.env.get("HECTOR_MATRIX_ALLOW_HTTP") == "1")
                 if error:
                     return self._json({"ok": False, "error": error}, 400)
-                self._apply_notify(clean)            # builds first: a failure leaves the file alone
-                NotifySettings.save(self.state_dir, clean)
+                backends, level = self._build_notify(clean)        # 1. can it be built at all?
+                NotifySettings.save(self.state_dir, clean)         # 2. persist (a failed write changes nothing)
+                self.notifier.reconfigure(backends, level)         # 3. only now switch over
             except ValueError as e:
                 return self._json({"ok": False, "error": str(e)}, 400)
             except OSError as e:

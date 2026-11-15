@@ -560,7 +560,42 @@ def test_first_save_after_a_hector_env_setup_keeps_the_env_token(cfg_app):
                    "HECTOR_MATRIX_TOKEN": "envtoken1234"}
     cfg = cfg_app.notify_config()
     assert cfg["source"] == "env" and cfg["token_set"] is True and cfg["homeserver"] == "https://env.example"
-    res = post(cfg_app, dict(FORM, token="", homeserver="https://matrix.example.org"))
+    res = post(cfg_app, dict(FORM, token="", homeserver="https://env.example/"))
     assert body_json(res)["ok"] is True
     assert cfg_app.notifier.backends[0].token == "envtoken1234"
     assert "envtoken1234" not in res[2].decode()
+
+
+def test_a_kept_token_cannot_be_redirected_to_another_server(cfg_app):
+    """Admin login + empty token field + other homeserver must not make the bot send the old token there."""
+    cfg_app.env = {"HECTOR_MATRIX_HOMESERVER": "https://env.example", "HECTOR_MATRIX_ROOM": "!e:env",
+                   "HECTOR_MATRIX_TOKEN": "envtoken1234"}
+    res = post(cfg_app, dict(FORM, token="", homeserver="https://evil.example"))      # token from hector.env
+    assert res[0] == 400 and "Token" in body_json(res)["error"]
+    post(cfg_app, dict(FORM, homeserver="https://env.example"))                      # now a stored token
+    for target in ("https://evil.example", "https://evil.example/"):
+        res = post(cfg_app, dict(FORM, token="", homeserver=target))
+        assert res[0] == 400
+    assert cfg_app.notifier.backends[0].homeserver == "https://env.example"
+    assert json.load(open(cfg_app.state / "notify.json"))["homeserver"] == "https://env.example"
+    post(cfg_app, {"action": "join_matrix"})
+    post(cfg_app, {"action": "test_notification"})
+    cfg_app.notifier.process(cfg_app.clock())
+    assert all(url.startswith("https://env.example/") for _, url, _ in cfg_app.http_calls)
+    # the admin may use a token of their own with another server
+    assert body_json(post(cfg_app, dict(FORM, token="syt_own_token_xx", homeserver="https://evil.example")))["ok"] is True
+
+
+def test_a_failed_write_leaves_the_running_notifier_untouched(cfg_app, monkeypatch):
+    post(cfg_app, FORM)
+    before = cfg_app.notifier.backends[0]
+
+    def boom(*a, **k):
+        raise OSError("Datenträger voll")
+    monkeypatch.setattr(SS.NotifySettings, "save", boom)
+    res = post(cfg_app, dict(FORM, level="critical"))
+    assert res[0] == 500 and "speichern" in body_json(res)["error"]
+    assert cfg_app.notifier.backends[0] is before and cfg_app.notifier.status()["min_level"] == "error"
+    monkeypatch.setattr(SS.NotifySettings, "delete", boom)
+    res = post(cfg_app, {"action": "reset_notify"})
+    assert res[0] == 500 and cfg_app.notifier.backends[0] is before

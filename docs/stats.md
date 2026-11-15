@@ -88,7 +88,8 @@ ist `NOPASSWD` ohnehin gesetzt.
   20 000 Dosierungen, 100 000 Zutatenzeilen, 5 000 Fehler und 5 000 Ereignisse (stündliches Aufräumen); bei normaler
   Nutzung wird das nie erreicht. Die Statistikseite zeigt dann die letzten 20 000 Drinks.
 * **Matrix-Token im Dashboard:** wird in `notify.json` (`0600`) abgelegt, ist nur schreibbar (kommt nie zurück in den
-  Browser, nicht in `/api/admin/overview`, nicht in den Verlauf) und wird bei Eingabe über Klartext-HTTP mitgelesen, wenn jemand
+  Browser, nicht in `/api/admin/overview`, nicht in den Verlauf), ist an den eingetragenen Homeserver gebunden (andere
+  Adresse = Token neu eingeben) und wird bei Eingabe über Klartext-HTTP mitgelesen, wenn jemand
   im Netz lauscht. Deshalb: SSH-Tunnel oder `hector.env`, siehe [matrix.md](matrix.md).
 * `POST` verlangt den Header `X-Hector-Admin: 1`, JSON als Content-Type und einen passenden
   `Origin` (gegen fremde Webseiten, die Aktionen auslösen wollen).

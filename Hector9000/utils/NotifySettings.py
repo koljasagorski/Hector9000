@@ -9,7 +9,10 @@
 #   the environment (/etc/hector9000/hector.env) is used as before.
 #
 #   The token is write-only: describe() tells that one is stored, but no function
-#   here hands it back out to the web.
+#   here hands it back out to the web. It is also bound to the homeserver it was
+#   entered for: leaving the token field empty keeps the stored token only while the
+#   homeserver stays the same, so nobody can point the bot at another server and have
+#   it send the stored token there.
 #
 
 import json
@@ -82,16 +85,30 @@ def delete(state_dir):
         pass
 
 
+def same_server(a, b):
+    """Same homeserver address (ignoring case and a trailing slash)?"""
+    norm = lambda u: str(u or "").strip().rstrip("/").lower()          # noqa: E731
+    return bool(norm(a)) and norm(a) == norm(b)
+
+
 def validate(form, current=None, allow_http=False):
     """Check what the dashboard sent. Returns (settings, None) or (None, "German error message").
 
-    An empty or missing token keeps the stored one; that is how the form can be saved
-    without ever showing the token again."""
+    `current` is {"token": ..., "homeserver": ...} of what is stored (or set in hector.env).
+    An empty token field keeps that token, but only for the SAME homeserver; for a different
+    one it must be typed again. That is how the form can be saved without ever showing the
+    token, and still cannot be used to send the stored token somewhere else."""
     current = current or {}
     enabled = form.get("enabled") in (True, "true", "1", 1)
     homeserver = str(form.get("homeserver") or "").strip().rstrip("/")
     room = str(form.get("room") or "").strip()
-    token = str(form.get("token") or "").strip() or current.get("token", "")
+    token = str(form.get("token") or "").strip()
+    token_dropped = False
+    if not token and current.get("token"):
+        if same_server(homeserver, current.get("homeserver")):
+            token = current["token"]
+        else:
+            token_dropped = True
     level = str(form.get("level") or DEFAULT_LEVEL)
     msgtype = str(form.get("msgtype") or DEFAULT_MSGTYPE)
 
@@ -110,6 +127,9 @@ def validate(form, current=None, allow_http=False):
     if enabled:
         for value, name in ((homeserver, "Homeserver"), (room, "Raum-ID"), (token, "Zugangstoken")):
             if not value:
+                if token_dropped and name == "Zugangstoken":
+                    return None, ("Der Homeserver wurde geändert: bitte den Token neu eintragen "
+                                  "(der gespeicherte gilt nur für den bisherigen Server)")
                 return None, "%s fehlt" % name
     return {"enabled": enabled, "homeserver": homeserver, "room": room, "token": token,
             "level": level, "msgtype": msgtype}, None

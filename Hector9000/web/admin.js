@@ -19,6 +19,7 @@
     function run(action, args, done) {
         return H.postAction(action, args).then(function (r) {
             H.toast(r.ok ? "Erledigt" : (r.error || "Fehlgeschlagen"), !r.ok);
+            if (r.ok && (action === "save_notify" || action === "reset_notify")) draft = null;   // show what the server now has
             load();
             if (done) done(r);
         }).catch(function () { H.toast("Keine Verbindung", true); });
@@ -217,8 +218,7 @@
     }
     function saveChat() {
         var d = chatDraft();
-        run("save_notify", { enabled: d.enabled, homeserver: d.homeserver, room: d.room, token: d.token, level: d.level, msgtype: d.msgtype },
-            function (r) { if (r.ok) draft = null; });
+        run("save_notify", { enabled: d.enabled, homeserver: d.homeserver, room: d.room, token: d.token, level: d.level, msgtype: d.msgtype });
     }
 
     function chat() {
@@ -245,7 +245,7 @@
                 row("Raum-ID", textField("room", "text", "!abc123:example.org", "Raum-ID"),
                     "Beginnt mit ! (nicht der Alias mit #). In Element: Raum-Einstellungen → Erweitert. Der Raum muss unverschlüsselt sein."),
                 row("Zugangstoken des Bots", textField("token", "password", c.token_set ? "gespeichert (leer = behalten)" : "syt_…", "Zugangstoken"),
-                    c.token_set ? "Der gespeicherte Token wird nie angezeigt." : "Wie man ihn holt: docs/matrix.md."),
+                    c.token_set ? "Der gespeicherte Token wird nie angezeigt und nur an den bisherigen Homeserver geschickt: ändert sich die Adresse, den Token neu eintragen." : "Wie man ihn holt: docs/matrix.md."),
                 row("Welche Meldungen", selectField("level", LEVELS, "Mindest-Stufe")),
                 row("Nachrichtentyp", selectField("msgtype", MSGTYPES, "Nachrichtentyp")),
                 h("div", { class: "actions" }, buttons),

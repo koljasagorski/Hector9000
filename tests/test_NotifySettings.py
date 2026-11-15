@@ -17,11 +17,35 @@ def test_validate_accepts_a_complete_form_and_trims():
     assert clean["enabled"] is True and clean["level"] == "error" and clean["msgtype"] == "m.notice"
 
 
-def test_empty_token_keeps_the_stored_one():
-    clean, err = NS.validate(dict(GOOD, token=""), current={"token": "syt_stored_token"})
+STORED = {"token": "syt_stored_token", "homeserver": "https://matrix.example.org"}
+
+
+def test_empty_token_keeps_the_stored_one_for_the_same_homeserver():
+    clean, err = NS.validate(dict(GOOD, token=""), current=STORED)
     assert err is None and clean["token"] == "syt_stored_token"
-    clean, err = NS.validate(dict(GOOD, token="syt_new_token_1"), current={"token": "syt_stored_token"})
+    clean, err = NS.validate(dict(GOOD, token="syt_new_token_1"), current=STORED)
     assert clean["token"] == "syt_new_token_1"
+    # address spelled differently, same server
+    clean, err = NS.validate(dict(GOOD, token="", homeserver="HTTPS://Matrix.Example.org/"), current=STORED)
+    assert err is None and clean["token"] == "syt_stored_token"
+
+
+def test_the_stored_token_is_never_carried_to_another_homeserver():
+    other = dict(GOOD, token="", homeserver="https://evil.example")
+    clean, err = NS.validate(other, current=STORED)
+    assert clean is None and "Token neu eintragen" in err
+    # a switched-off draft saves, but without the token that belonged to the old server
+    clean, err = NS.validate(dict(other, enabled=False), current=STORED)
+    assert err is None and clean["token"] == ""
+    # an empty homeserver is no reason to keep it either
+    clean, err = NS.validate(dict(GOOD, enabled=False, token="", homeserver=""), current=STORED)
+    assert clean["token"] == ""
+    # typing a token for the new server is fine
+    clean, err = NS.validate(dict(other, token="syt_token_for_other"), current=STORED)
+    assert err is None and clean["token"] == "syt_token_for_other"
+    # a stored token without a known server (older file) is not reused
+    clean, err = NS.validate(dict(GOOD, token=""), current={"token": "syt_stored_token"})
+    assert clean is None and err
 
 
 @pytest.mark.parametrize("field,value", [

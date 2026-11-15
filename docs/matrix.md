@@ -20,15 +20,18 @@ Diese Datei hat Vorrang vor den Variablen in `hector.env`; **„Gespeicherte Ein
 dann gilt wieder `hector.env`. Der Haken „Fehler in den Matrix-Chat senden“ schaltet den Bot aus, ohne die Werte zu verlieren.
 
 * Der **Token ist nur schreibbar**: der Server schickt ihn nie zurück an den Browser, das Feld bleibt leer
-  („gespeichert, leer = behalten“). Er steht auch nicht im Verlauf oder im Log.
+  („gespeichert, leer = behalten“). Er steht auch nicht im Verlauf oder im Log. Außerdem ist er an den **Homeserver
+  gebunden**, für den er eingetragen wurde: wer die Adresse ändert, muss den Token neu eintippen (ein leeres Feld
+  behält ihn nur bei gleicher Adresse). So lässt sich der gespeicherte Token nicht an einen anderen Server umleiten.
 * **Achtung Klartext:** Das Dashboard läuft über HTTP. Wer im selben WLAN mitliest, sieht den Token beim Eintragen
   (und das Admin-Passwort bei jedem Aufruf). Die Seite warnt dann. Besser: den Token über einen SSH-Tunnel eintragen
   (`ssh -L 8080:localhost:8080 <benutzer>@<pi>`, dann `http://localhost:8080/admin`) oder in `hector.env`.
 * Der Homeserver muss `https://` sein. `http://` (nur für einen Server im eigenen LAN) lässt sich ausschließlich mit
   `HECTOR_MATRIX_ALLOW_HTTP=1` in `hector.env` freischalten, nicht im Dashboard. Weiterleitungen (Redirects) folgt der
   Bot nie, der Token geht also nicht an einen anderen Server.
-* Wer sich im Dashboard anmelden kann, kann den Bot also auf einen **beliebigen https-Server** zeigen lassen. Das ist
-  gewollt, aber ein Grund mehr für ein starkes Admin-Passwort.
+* Wer sich im Dashboard anmelden kann, kann den Bot mit **einem eigenen Token** auf einen beliebigen https-Server zeigen
+  lassen (dann gehen die Fehlermeldungen dorthin). Den gespeicherten Token bekommt er dadurch nicht. Ein starkes
+  Admin-Passwort bleibt wichtig.
 
 ## Einrichten über die Umgebung (Alternative, ohne Dashboard)
 
@@ -52,7 +55,7 @@ dann gilt wieder `hector.env`. Der Haken „Fehler in den Matrix-Chat senden“ 
        HECTOR_NOTIFY_LEVEL=warning
 
 5. Stats-Dienst neu starten und im Admin-Dashboard (Reiter „Chat“) **„Testnachricht senden“** auslösen. Beim ersten
-   Speichern im Dashboard wird der Token aus `hector.env` übernommen, man muss ihn nicht neu eintippen.
+   Speichern im Dashboard wird der Token aus `hector.env` übernommen (bei unveränderter Homeserver-Adresse), man muss ihn nicht neu eintippen.
 
 | Variable | Standard | Bedeutung |
 |---|---|---|
