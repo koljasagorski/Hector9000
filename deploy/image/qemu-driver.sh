@@ -103,7 +103,8 @@ run_phase() { # run_phase N
         sed 's/\x1b\[[0-9;]*[A-Za-z]//g; s/\r//g' "$log" | tail -15 | sed 's/^/        /'
         return 1
     fi
-    local f; f="$(grep -a 'QEMUTEST-PHASE-DONE' "$log" | tail -1 | awk '{print $3}')"
+    # "QEMUTEST-PHASE-DONE <phase> <failed>", possibly with a journal prefix (host name, process) in front
+    local f; f="$(sed -n 's/.*QEMUTEST-PHASE-DONE [0-9][0-9]* \([0-9][0-9]*\).*/\1/p' "$log" | tail -1)"
     TOTAL_FAILS=$((TOTAL_FAILS + ${f:-1}))
     return 0
 }
