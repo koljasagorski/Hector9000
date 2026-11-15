@@ -263,7 +263,7 @@ if [ "$DRY_RUN" = 0 ]; then
         [ -e "$src" ] || return 0
         if [ -e "$dst" ] || [ -L "$dst" ]; then warn "${dst} exists, leaving ${src} where it is"; return 0; fi
         info "move: ${src} -> ${dst}"
-        mv -n "$src" "$dst"
+        mv -n -T "$src" "$dst"
         chown -h "$owner" "$dst"
     }
     # first layout: everything directly in STATE_DIR (owned by hector, services ran as hector)

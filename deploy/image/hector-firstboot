@@ -2,7 +2,7 @@
 #
 # First boot of a Hector9000 disk image (hector-firstboot.service, installed to /usr/local/sbin).
 #
-#   1. The data partition HECTORDATA grows to the end of the card. The image is only ~4 GB
+#   1. The data partition (label HECTORDATA, mounted by PARTUUID) grows to the end of the card. The image is only ~4 GB
 #      (system + a small data partition) so that it fits on any card; the card's real size
 #      is used here, once. The system partition keeps its fixed size on purpose.
 #   2. The data folders exist with the right owners.
@@ -14,7 +14,6 @@
 #
 set -u
 
-LABEL="HECTORDATA"
 MNT="/var/lib/hector9000"
 FLAG="/etc/hector9000/firstboot.done"
 BOOT="/boot/firmware"
@@ -24,13 +23,21 @@ failed=0
 log() { echo "[hector-firstboot] $*"; }
 
 grow_data_partition() {
-    local dev name pk disk num start size dsize end p
-    if ! dev="$(blkid -L "$LABEL" 2>/dev/null)"; then
-        log "no partition labelled $LABEL - nothing to grow"
+    local dev name pk disk num start size dsize end p root_id data_id
+    # The partition that fstab mounted (by PARTUUID) - never "whatever carries the label".
+    if ! dev="$(findmnt -no SOURCE "$MNT" 2>/dev/null)" || [ -z "$dev" ]; then
+        log "$MNT is not mounted - nothing to grow"
         return 0
     fi
     dev="$(readlink -f "$dev")"
     name="${dev##*/}"
+    # it must be on the same disk as the system partition (same MBR disk id in the PARTUUID)
+    root_id="$(sed -n 's/.*[ ]root=PARTUUID=\([0-9a-fA-F]*\)-[0-9]*.*/\1/p' /proc/cmdline)"
+    data_id="$(blkid -s PARTUUID -o value "$dev" 2>/dev/null | sed 's/-[0-9]*$//')"
+    if [ -z "$root_id" ] || [ "$root_id" != "$data_id" ]; then
+        log "WARNING: $dev is not on the same disk as the system partition (or root= is not a PARTUUID) - not touching the partition table"
+        return 0
+    fi
     if [ ! -e "/sys/class/block/$name/partition" ]; then
         log "$dev is not a partition - nothing to grow"
         return 0

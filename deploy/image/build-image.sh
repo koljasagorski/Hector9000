@@ -84,7 +84,7 @@ trap cleanup EXIT
 # ------------------------------------------------------------------ 1. partitions
 log "Partition layout"
 read -r P1_START P1_SIZE < <(sfdisk -d "$BASE" | sed -n 's/^[^ ]*1 *: *start= *\([0-9]*\), *size= *\([0-9]*\),.*/\1 \2/p' | head -1)
-read -r P2_START P2_SIZE_OLD < <(sfdisk -d "$BASE" | sed -n 's/^[^ ]*2 *: *start= *\([0-9]*\), *size= *\([0-9]*\),.*/\1 \2/p' | head -1)
+read -r P2_START _ < <(sfdisk -d "$BASE" | sed -n 's/^[^ ]*2 *: *start= *\([0-9]*\), *size= *\([0-9]*\),.*/\1 \2/p' | head -1)
 [ -n "${P1_START:-}" ] && [ -n "${P2_START:-}" ] || die "could not read the partition table of $BASE"
 DISK_ID="$(sfdisk --disk-id "$BASE")"          # kept: root=PARTUUID=<id>-02 in cmdline.txt/fstab stays valid
 P2_SIZE=$((ROOT_MIB * 2048))
@@ -179,7 +179,8 @@ for p in "${PURGE[@]}"; do
 done
 if [ "${#INSTALLED[@]}" -gt 0 ]; then
     # simulate first: never let a purge pull out something the system needs
-    REMOVALS="$(CH apt-get -s purge --autoremove "${INSTALLED[@]}" | sed -n 's/^Remv \([^ ]*\).*/\1/p')"
+    REMOVALS="$(CH apt-get -s purge --autoremove "${INSTALLED[@]}" | sed -n -E 's/^(Remv|Purg) ([^ ]+).*/\2/p' | sed 's/:.*//')"
+    [ -n "$REMOVALS" ] || die "could not read the list of packages that would be removed (apt output changed?)"
     for keep in systemd sudo network-manager openssh-server raspi-config raspberrypi-sys-mods mosquitto cage chromium \
                 python3 python3-venv git linux-image-rpi-v8 raspi-firmware overlayroot; do
         if printf '%s\n' "$REMOVALS" | grep -qx "$keep"; then die "purging ${INSTALLED[*]} would remove '$keep' - adjust the list"; fi
@@ -212,10 +213,14 @@ if grep -q '^127\.0\.1\.1' "$MNT/etc/hosts"; then
 else
     printf '127.0.1.1\t%s\n' "$HOSTNAME_DEFAULT" >> "$MNT/etc/hosts"
 fi
-# data partition by label (the partition number is not what matters), nofail: a damaged data
-# partition must not stop the boot; the hector services then refuse to start (RequiresMountsFor)
-grep -q 'LABEL=HECTORDATA' "$MNT/etc/fstab" || \
-    printf 'LABEL=HECTORDATA  /var/lib/hector9000  ext4  defaults,noatime,nofail,x-systemd.device-timeout=15s  0  2\n' >> "$MNT/etc/fstab"
+# Data partition by PARTUUID (disk id + partition number), NOT by label: a USB stick that is
+# labelled HECTORDATA must not be able to take its place. nosuid,nodev,noexec: nothing is run from
+# there. nofail: a damaged data partition must not stop the boot; the hector services then refuse
+# to start (RequiresMountsFor) and the maintenance menu shows up.
+DATA_PARTUUID="${DISK_ID#0x}-03"
+grep -q '/var/lib/hector9000' "$MNT/etc/fstab" || \
+    printf 'PARTUUID=%s  /var/lib/hector9000  ext4  defaults,noatime,nosuid,nodev,noexec,nofail,x-systemd.device-timeout=15s  0  2\n' \
+        "$DATA_PARTUUID" >> "$MNT/etc/fstab"
 CMDLINE="$MNT/boot/firmware/cmdline.txt"
 # The stock "init=.../firstboot" makes the initramfs grow the SYSTEM partition to the end of the
 # card (it would collide with the data partition) and reboot once. hector-firstboot replaces it.

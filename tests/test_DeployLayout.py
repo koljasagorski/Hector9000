@@ -96,9 +96,13 @@ def test_first_boot_unit_matches_its_script_and_provisioning():
     assert setting(unit_text, "ExecStart") == ["/usr/local/sbin/hector-firstboot"]
     flag = re.search(r'^FLAG="([^"]+)"', script, re.M).group(1)
     assert setting(unit_text, "ConditionPathExists") == ["!" + flag]
-    assert 'LABEL="HECTORDATA"' in script and 'MNT="/var/lib/hector9000"' in script
+    assert 'MNT="/var/lib/hector9000"' in script and 'findmnt -no SOURCE "$MNT"' in script
+    assert "blkid -L" not in script          # never trust "whatever carries the label"
     # the same owners/modes as provision.sh gives the folders
     assert 'install -d -m 0751 -o hector -g hector "$MNT/hector"' in script
     assert 'install -d -m 0750 -o hector-stats -g hector-stats "$MNT/stats"' in script
+    build = read("image", "build-image.sh")
+    assert "PARTUUID=%s  /var/lib/hector9000  ext4  defaults,noatime,nosuid,nodev,noexec,nofail" in build
+    assert "LABEL=HECTORDATA  /var/lib" not in build
     prov = read("provision.sh")
     assert "image/hector-firstboot" in prov and "systemctl enable hector-firstboot.service" in prov
