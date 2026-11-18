@@ -74,7 +74,9 @@ class HectorHardware(api.HectorAPI):
         self.lightChannel = cfg["pca9685"]["lightpwmchannel"]
         self.lightPositions = cfg["pca9685"]["lightpositions"]
         pcafreq = cfg["pca9685"]["freq"]
-        self.pca = Adafruit_PCA9685.PCA9685()
+        # busnum is explicit: the old Adafruit_GPIO guesses the Pi from /proc/cpuinfo ("Hardware:"),
+        # which current kernels no longer print (RuntimeError: Could not determine default I2C bus)
+        self.pca = Adafruit_PCA9685.PCA9685(busnum=1)
         self.pca.set_pwm_freq(pcafreq)
 
         # setup arm stepper (A4988)

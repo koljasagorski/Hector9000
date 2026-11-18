@@ -123,7 +123,9 @@ class HX711:
 
     def read_np_arr8(self):
         dataBytes = self.read()
-        np_arr8 = numpy.uint8(dataBytes)
+        # read() returns three one-element arrays and an int (0). numpy >= 1.24 refuses such a
+        # ragged list ("inhomogeneous shape"), so flatten each item to one byte explicitly.
+        np_arr8 = numpy.array([int(numpy.ravel(b)[0]) for b in dataBytes], dtype=numpy.uint8)
 
         return np_arr8
 
