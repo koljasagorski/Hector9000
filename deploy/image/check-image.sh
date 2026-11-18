@@ -177,6 +177,15 @@ else
 fi
 fi
 
+section "Display"
+if [ -n "$(ivval display_rotate)" ]; then
+    grep -qx 'ROTATE=180' "$W/etc/hector9000/display.conf" 2>/dev/null && ok "display.conf: ROTATE=180 (display mounted upside down)" || fail "image-version says display_rotate but display.conf is wrong"
+    grep -q 'display.conf' "$W/usr/local/bin/hector-kiosk-session" && ok "hector-kiosk-session reads display.conf" || fail "hector-kiosk-session does not read display.conf"
+    grep -q 'rot180' "$W/opt/hector9000/webui/css/congress.css" && grep -q 'HECTOR_ROTATE' "$W/opt/hector9000/webui/kiosk.sh" && ok "the WebUI in the image can turn the page (rot180, HECTOR_ROTATE)" || fail "the WebUI in the image has no rotation support"
+else
+    [ ! -e "$W/etc/hector9000/display.conf" ] && ok "no display rotation (default)" || fail "display.conf exists but image-version has no display_rotate"
+fi
+
 section "Services"
 WANTS="$W/etc/systemd/system"
 for u in hector-server hector-controller hector-led hector-stats hector-kiosk; do

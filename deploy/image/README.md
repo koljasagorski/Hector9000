@@ -57,6 +57,13 @@ fremden WLAN angreifbar (Brute Force, auf einem Kongress-WLAN auch von anderen T
 zum WLAN auf echter Hardware klappt, lässt sich ohne Pi nicht prüfen (QEMU hat kein WLAN-Gerät): Profil, Land, Dienste und der Benutzer werden geprüft, der Verbindungsaufbau nicht.
 Verwendet das Netz WPA3-SAE oder eine Anmeldeseite (Captive Portal), reicht das Profil nicht.
 
+## Bild gedreht (Display kopfüber montiert)
+
+`build-image.sh --display-rotate 180` schreibt `/etc/hector9000/display.conf` (`ROTATE=180`). `hector-kiosk-session` liest sie und setzt `HECTOR_ROTATE=180`, `kiosk.sh` (WebUI)
+hängt `?rotate=180` an die Adresse, und die Seite dreht sich selbst (`html.rot180` in `css/congress.css`). Das `cage` der Basis (0.2.0) hat keine Drehoption mehr; die Drehung in der Seite
+gilt auch für Berührungen (Chromium rechnet sie über die Transformation zurück). Die geheime Tipp-Zone (5× oben links) bleibt dabei visuell oben links. Am laufenden Gerät: Datei anlegen
+(`echo ROTATE=180 | sudo tee /etc/hector9000/display.conf`) und `sudo systemctl restart hector-kiosk`. Gerade ohne Display/Touchscreen nur im Browser geprüft (Screenshot), nicht am Gerät.
+
 ## Welcher Pi?
 
 Das Image ist **arm64**: Pi 3, 3 B+, 3 A+, 4, 400, Zero 2 W, Compute Module 3/4 und Pi 2 **ab Revision 1.2** (BCM2837).

@@ -42,6 +42,7 @@ DATA_MIB=512
 HOSTNAME_DEFAULT="hector9000"
 KEEP_BUILD_TOOLS=0
 ACCESS_FILE=""
+DISPLAY_ROTATE=0
 WIFI_SSID="" WIFI_PSK="" WIFI_COUNTRY="DE" SSH_USER="" SSH_PASSWORD="" SSH_SUDO=1
 HAS_WIFI=0 HAS_SSH=0
 MNT="/mnt/hector-image"
@@ -65,6 +66,7 @@ while [ "$#" -gt 0 ]; do
         --hostname) HOSTNAME_DEFAULT="$2"; shift ;;
         --keep-build-tools) KEEP_BUILD_TOOLS=1 ;;
         --access-file) ACCESS_FILE="$2"; shift ;;
+        --display-rotate) DISPLAY_ROTATE="$2"; shift ;;
         -h|--help) sed -n '3,/^set -euo/p' "$0" | sed -e '$d' -e 's/^# \{0,1\}//'; exit 0 ;;
         *) die "unknown option: $1" ;;
     esac
@@ -79,6 +81,7 @@ for tool in losetup sfdisk e2fsck resize2fs mkfs.ext4 mount git chroot fstrim; d
     command -v "$tool" >/dev/null || die "missing tool: $tool"
 done
 case "$ROOT_MIB$DATA_MIB" in *[!0-9]*) die "--root-mib/--data-mib must be numbers" ;; esac
+case "$DISPLAY_ROTATE" in 0|180) ;; *) die "--display-rotate must be 0 or 180" ;; esac
 
 # ---- optional access preset (Wi-Fi + SSH login) -------------------------------------------------
 load_access() {   # plain KEY=VALUE lines; the file is parsed, never executed
@@ -286,6 +289,14 @@ tr -d '\n' < "$CMDLINE" > "$CMDLINE.tmp" && printf '\n' >> "$CMDLINE.tmp" && mv 
 info "cmdline.txt: $(cat "$CMDLINE")"
 grep -q 'firstboot' "$CMDLINE" && die "cmdline.txt still contains 'firstboot' (the initramfs would resize the system partition)"
 
+# ------------------------------------------------------------------ 5a. display rotation (optional)
+if [ "$DISPLAY_ROTATE" != 0 ]; then
+    info "display rotation ${DISPLAY_ROTATE} (/etc/hector9000/display.conf, read by hector-kiosk-session)"
+    mkdir -p "$MNT/etc/hector9000"
+    printf '# Hector9000 kiosk: display mounted upside down\nROTATE=%s\n' "$DISPLAY_ROTATE" > "$MNT/etc/hector9000/display.conf"
+    chmod 644 "$MNT/etc/hector9000/display.conf"
+fi
+
 # ------------------------------------------------------------------ 5b. access preset (optional)
 if [ "$HAS_WIFI" = 1 ] || [ "$HAS_SSH" = 1 ]; then
     log "Access preset: this image will CONTAIN credentials (never publish it)"
@@ -381,6 +392,7 @@ mkdir -p "$MNT/etc/hector9000"
         [ "$HAS_WIFI" = 1 ] && { echo "wifi_ssid: ${WIFI_SSID}"; echo "wifi_country: ${WIFI_COUNTRY}"; }
         [ "$HAS_SSH" = 1 ] && { echo "ssh_user: ${SSH_USER}"; echo "ssh_sudo: $([ "$SSH_SUDO" = 1 ] && echo yes || echo no)"; }
     fi
+    [ "$DISPLAY_ROTATE" = 0 ] || echo "display_rotate: ${DISPLAY_ROTATE}"
 } > "$MNT/etc/hector9000/image-version"
 rm -f "$MNT/usr/sbin/policy-rc.d" "$MNT/etc/resolv.conf"
 [ -z "$RESOLV_LINK" ] || ln -s "$RESOLV_LINK" "$MNT/etc/resolv.conf"

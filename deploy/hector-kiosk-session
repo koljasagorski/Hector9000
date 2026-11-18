@@ -27,6 +27,14 @@ if ! command -v cage >/dev/null 2>&1; then
     exit 1
 fi
 
+# Optional /etc/hector9000/display.conf (KEY=VALUE, parsed, never executed): ROTATE=180 for a display that
+# is mounted upside down. kiosk.sh turns the page itself (cage 0.2 has no rotate option).
+DISPLAY_CONF="${HECTOR_DISPLAY_CONF:-/etc/hector9000/display.conf}"
+if [ -r "$DISPLAY_CONF" ]; then
+    rot="$(sed -n 's/^ROTATE=\([0-9]*\)[[:space:]]*$/\1/p' "$DISPLAY_CONF" | head -1)"
+    if [ -n "$rot" ]; then export HECTOR_ROTATE="$rot"; fi
+fi
+
 # pam_systemd normally sets this; fall back for odd start methods
 export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
 
