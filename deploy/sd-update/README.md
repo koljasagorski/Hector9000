@@ -60,3 +60,12 @@ einmal mit `nft`, einmal mit `iptables`. Von außen sind 1883/9001 danach gesper
 eigene LAN-Adresse funktionieren, doppeltes Starten legt keine Regeln doppelt an, `stop` hebt die Sperre auf, ohne
 Werkzeug gibt es eine Warnung mit Exit-Code 1. IPv6 und die Reihenfolge beim Booten (Unit vor Mosquitto) sind nicht
 getestet.
+
+## Diagnose ohne Zugriff aufs Gerät (`diagnose.sh`)
+
+Für eine Karte, an deren Pi sich nichts anschließen lässt (das Journal ist `volatile`, nach dem Ausschalten ist es weg): `diagnose.sh` stellt als Erstes die `cmdline.txt` wieder her
+(normaler Boot danach, egal was passiert), wartet, bis das System 150 s läuft, und schreibt Zustand der Dienste, Journal-Auszüge, Netzwerk, `dmesg`, einen Handstart des Controllers und
+einen Import-Test nach `hector-diag/diag.txt` auf die Boot-Partition (FAT, an jedem Rechner lesbar). Vorbereiten am Rechner (Boot-Partition eingehängt): Ordner `hector-diag` anlegen,
+`diagnose.sh` als `run.sh` hinein, die unveränderte `cmdline.txt` als `cmdline.txt.orig` daneben, an die **eine** Zeile der `cmdline.txt` ` systemd.run=/boot/firmware/hector-diag/run.sh`
+anhängen. Karte in den Pi, rund 4 Minuten laufen lassen, Strom trennen, `diag.txt` lesen. Der Handstart legt `h9k.db` an wie ein normaler Start.
+
