@@ -136,6 +136,11 @@ nur im Container (`debian:bookworm`, arm64), als System des Images im Container 
 * **Rename-Dialog der Basis abgeschaltet:** ohne `userconf.txt` blockiert `userconfig.service` (Dialog auf VT8) den Boot und verdeckt den Kiosk. Drop-in
   `deploy/image/userconfig-hector.conf` (installiert von `provision.sh --image`); `hector-firstboot` macht nach der Imager-`custom.toml` das `getty@tty1` von
   `cancel-rename` rückgängig (tty1 gehört dem Kiosk). Stand der Image-Tests: Container 66 ok, statisch 109 ok, QEMU 3 Phasen ok (54), siehe `deploy/image/README.md`.
+* **Image mit eingebautem WLAN/SSH (nur auf Wunsch, 2026-11-18):** `build-image.sh --access-file DATEI` baut ein WLAN-Profil (autoconnect) und einen SSH-Login
+  (sshd an, Passwort-Login, Benutzer mit `sudo` per Passwort) fest ein. **Die Datei mit den Werten liegt außerhalb des Repos** (`~/.config/hector9000-image/access.env` auf dem
+  Mac des Betreibers, Vorlage `deploy/image/access.env.example`); das Repo ist öffentlich, Zugangsdaten gehören nie hinein. Ein so gebautes Image (`hector9000-ACCESS.img` im Volume
+  `hector-img-work`) darf nicht weitergegeben werden. Die Prüfskripte erkennen es an `access: preset` in `/etc/hector9000/image-version`. Stand: statisch 130 ok, QEMU 3 Phasen ok;
+  der WLAN-Verbindungsaufbau ist ohne Hardware **ungetestet**. Details: `deploy/image/README.md`, Abschnitt „Variante mit eingebautem WLAN und SSH-Login“.
 * **Sudo:** nur Neustart, Kiosk/Dienste neu starten, `date -u -s @<10 Ziffern>` (Uhr stellen über den Controller), Passwort anzeigen (als `hector-stats`),
   `hector-overlay status|on|off`. Ein Test (`tests/test_DeployLayout.py`) hält Skripte, Units, sudoers und Pfade im Gleichlauf.
 * **Restrisiko, bewusst nicht behoben:** MQTT hat keine Absender-Prüfung. Wer den Broker erreicht (im schlanken OS nur lokale Prozesse), kann „Uhr stellen“ mit

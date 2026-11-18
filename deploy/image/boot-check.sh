@@ -100,7 +100,16 @@ case "$pis" in
     *) fail "the user 'pi' has a password ($pis)" ;;
 esac
 ssh_state="$(systemctl is-enabled ssh 2>&1 | tail -1)"
-[ "$ssh_state" != enabled ] && ok "SSH is not enabled by default ($ssh_state)" || fail "SSH is enabled in the image"
+iv_access="$(sed -n 's/^access: *//p' /etc/hector9000/image-version 2>/dev/null | head -1)"
+iv_user="$(sed -n 's/^ssh_user: *//p' /etc/hector9000/image-version 2>/dev/null | head -1)"
+if [ "$iv_access" = preset ] && [ -n "$iv_user" ]; then
+    [ "$ssh_state" = enabled ] && ok "SSH is enabled (access preset, login ${iv_user})" || fail "SSH is not enabled although the image has an SSH login ($ssh_state)"
+    [ "$(passwd -S "$iv_user" 2>/dev/null | awk '{print $2}')" = P ] && ok "${iv_user} has a usable password" || fail "${iv_user} has no usable password: $(passwd -S "$iv_user" 2>&1)"
+    [ "$(id -u "$iv_user" 2>/dev/null)" != 1000 ] && ok "${iv_user} is not uid 1000" || fail "${iv_user} has uid 1000"
+    runuser -u hector -- sudo -n -l 2>&1 | grep -q "(ALL) NOPASSWD: ALL" && fail "hector has unrestricted sudo" || ok "the service user hector still has no blanket sudo"
+else
+    [ "$ssh_state" != enabled ] && ok "SSH is not enabled by default ($ssh_state)" || fail "SSH is enabled in the image"
+fi
 [ -z "$(find /etc/ssh -name 'ssh_host_*' 2>/dev/null)" ] && ok "no SSH host keys baked into the image" || fail "SSH host keys exist"
 
 section "sudo"

@@ -107,3 +107,7 @@ admin_password
 notify.json
 hector.env
 /stats.db*
+
+# credentials for image builds (deploy/image/README.md): never in the repository
+deploy/image/access.env
+*.nmconnection

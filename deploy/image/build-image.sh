@@ -22,8 +22,13 @@
 #      machine-id, logs, caches, shell history), set fstab/cmdline.txt for the 3 partitions
 #   6. check the file system, trim, write <out>.sha256
 #
-# No password, user name, Wi-Fi or key is put into the image. The Raspberry Pi Imager adds
-# those (OS customisation); the admin password of the dashboard is made at the first start.
+# By default no password, user name, Wi-Fi or key is put into the image. The Raspberry Pi Imager
+# adds those (OS customisation); the admin password of the dashboard is made at the first start.
+#
+# Optional --access-file FILE bakes a login and/or a Wi-Fi in (KEY=VALUE lines, see
+# access.env.example): Wi-Fi that joins by itself (NetworkManager profile, autoconnect), and an
+# SSH login (sshd enabled, user + password). That image CONTAINS credentials: keep the file out of
+# the repository and never publish such an image. Without the option nothing of this happens.
 #
 set -euo pipefail
 
@@ -36,6 +41,9 @@ ROOT_MIB=3584
 DATA_MIB=512
 HOSTNAME_DEFAULT="hector9000"
 KEEP_BUILD_TOOLS=0
+ACCESS_FILE=""
+WIFI_SSID="" WIFI_PSK="" WIFI_COUNTRY="DE" SSH_USER="" SSH_PASSWORD="" SSH_SUDO=1
+HAS_WIFI=0 HAS_SSH=0
 MNT="/mnt/hector-image"
 
 log() { printf '\033[1m==>\033[0m %s\n' "$*"; }
@@ -56,6 +64,7 @@ while [ "$#" -gt 0 ]; do
         --data-mib) DATA_MIB="$2"; shift ;;
         --hostname) HOSTNAME_DEFAULT="$2"; shift ;;
         --keep-build-tools) KEEP_BUILD_TOOLS=1 ;;
+        --access-file) ACCESS_FILE="$2"; shift ;;
         -h|--help) sed -n '3,/^set -euo/p' "$0" | sed -e '$d' -e 's/^# \{0,1\}//'; exit 0 ;;
         *) die "unknown option: $1" ;;
     esac
@@ -70,6 +79,47 @@ for tool in losetup sfdisk e2fsck resize2fs mkfs.ext4 mount git chroot fstrim; d
     command -v "$tool" >/dev/null || die "missing tool: $tool"
 done
 case "$ROOT_MIB$DATA_MIB" in *[!0-9]*) die "--root-mib/--data-mib must be numbers" ;; esac
+
+# ---- optional access preset (Wi-Fi + SSH login) -------------------------------------------------
+load_access() {   # plain KEY=VALUE lines; the file is parsed, never executed
+    local line key val
+    while IFS= read -r line || [ -n "$line" ]; do
+        line="${line%$'\r'}"
+        case "$line" in ''|'#'*) continue ;; esac
+        case "$line" in *=*) ;; *) die "access file: a line without '=' (comments start with #)" ;; esac
+        key="${line%%=*}"; val="${line#*=}"
+        case "$val" in
+            \"*\") val="${val#\"}"; val="${val%\"}" ;;
+            \'*\') val="${val#\'}"; val="${val%\'}" ;;
+        esac
+        case "$key" in
+            WIFI_SSID|WIFI_PSK|WIFI_COUNTRY|SSH_USER|SSH_PASSWORD|SSH_SUDO) printf -v "$key" '%s' "$val" ;;
+            *) die "access file: unknown key '${key}' (allowed: WIFI_SSID WIFI_PSK WIFI_COUNTRY SSH_USER SSH_PASSWORD SSH_SUDO)" ;;
+        esac
+    done < "$ACCESS_FILE"
+}
+if [ -n "$ACCESS_FILE" ]; then
+    [ -f "$ACCESS_FILE" ] || die "--access-file: $ACCESS_FILE is not a file"
+    load_access
+    if [ -n "$WIFI_SSID$WIFI_PSK" ]; then
+        [ -n "$WIFI_SSID" ] && [ -n "$WIFI_PSK" ] || die "access file: WIFI_SSID and WIFI_PSK belong together"
+        [ "${#WIFI_SSID}" -le 32 ] || die "access file: WIFI_SSID is longer than 32 characters"
+        case "$WIFI_SSID$WIFI_PSK" in *$'\n'*|*$'\r'*) die "access file: no line breaks in WIFI_SSID/WIFI_PSK" ;; esac
+        case "$WIFI_SSID" in *';'*) die "access file: WIFI_SSID must not contain ';' (NetworkManager keyfile)" ;; esac
+        [ "${#WIFI_PSK}" -ge 8 ] && [ "${#WIFI_PSK}" -le 63 ] || die "access file: WIFI_PSK must have 8..63 characters (WPA-PSK)"
+        [[ "$WIFI_COUNTRY" =~ ^[A-Z]{2}$ ]] || die "access file: WIFI_COUNTRY must be a two-letter code such as DE"
+        HAS_WIFI=1
+    fi
+    if [ -n "$SSH_USER$SSH_PASSWORD" ]; then
+        [ -n "$SSH_USER" ] && [ -n "$SSH_PASSWORD" ] || die "access file: SSH_USER and SSH_PASSWORD belong together"
+        [[ "$SSH_USER" =~ ^[A-Za-z_][A-Za-z0-9_-]{0,31}$ ]] || die "access file: SSH_USER has characters that are not allowed in a login name"
+        case "$SSH_USER" in root|pi|hector|hector-stats) die "access file: SSH_USER '$SSH_USER' is reserved" ;; esac
+        case "$SSH_PASSWORD" in *$'\n'*|*$'\r'*) die "access file: no line breaks in SSH_PASSWORD" ;; esac
+        case "$SSH_SUDO" in 0|1) ;; *) die "access file: SSH_SUDO must be 0 or 1" ;; esac
+        HAS_SSH=1
+    fi
+    [ "$HAS_WIFI$HAS_SSH" != 00 ] || die "access file: no WIFI_*/SSH_* values in it"
+fi
 
 # In a container /dev is a snapshot: loop devices created later have no node. Make plenty.
 for i in $(seq 0 63); do [ -e "/dev/loop$i" ] || mknod "/dev/loop$i" b 7 "$i" 2>/dev/null || true; done
@@ -236,6 +286,86 @@ tr -d '\n' < "$CMDLINE" > "$CMDLINE.tmp" && printf '\n' >> "$CMDLINE.tmp" && mv 
 info "cmdline.txt: $(cat "$CMDLINE")"
 grep -q 'firstboot' "$CMDLINE" && die "cmdline.txt still contains 'firstboot' (the initramfs would resize the system partition)"
 
+# ------------------------------------------------------------------ 5b. access preset (optional)
+if [ "$HAS_WIFI" = 1 ] || [ "$HAS_SSH" = 1 ]; then
+    log "Access preset: this image will CONTAIN credentials (never publish it)"
+fi
+if [ "$HAS_WIFI" = 1 ]; then
+    info "Wi-Fi '${WIFI_SSID}' (country ${WIFI_COUNTRY}): NetworkManager profile with autoconnect"
+    grep -q "^${WIFI_COUNTRY}[[:space:]]" "$MNT/usr/share/zoneinfo/iso3166.tab" || die "WIFI_COUNTRY ${WIFI_COUNTRY} is not an ISO 3166 code"
+    # same as raspi-config do_wifi_country: the regulatory domain goes on the kernel command line
+    sed -i -e 's/ *cfg80211\.ieee80211_regdom=[^ ]*//' -e "s/\(.*\)/\1 cfg80211.ieee80211_regdom=${WIFI_COUNTRY}/" "$CMDLINE"
+    NMDIR="$MNT/etc/NetworkManager/system-connections"
+    mkdir -p "$NMDIR"
+    # NetworkManager ignores connection files that are not 0600 root:root
+    ( umask 077
+      cat > "$NMDIR/hector-wifi.nmconnection" <<NM
+[connection]
+id=${WIFI_SSID}
+uuid=$(cat /proc/sys/kernel/random/uuid)
+type=wifi
+autoconnect=true
+
+[wifi]
+mode=infrastructure
+ssid=${WIFI_SSID}
+hidden=false
+
+[wifi-security]
+key-mgmt=wpa-psk
+psk=${WIFI_PSK}
+
+[ipv4]
+method=auto
+
+[ipv6]
+addr-gen-mode=default
+method=auto
+
+[proxy]
+NM
+    )
+    chown root:root "$NMDIR/hector-wifi.nmconnection"; chmod 600 "$NMDIR/hector-wifi.nmconnection"
+    # insurance: the radio must not stay soft-blocked now that the country is set
+    cat > "$MNT/etc/systemd/system/hector-wifi-unblock.service" <<'UNIT'
+[Unit]
+Description=Unblock the Wi-Fi radio (country is set on the kernel command line)
+Before=NetworkManager.service
+After=systemd-rfkill.service
+
+[Service]
+Type=oneshot
+ExecStart=-/usr/sbin/rfkill unblock wifi
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+    CH systemctl enable hector-wifi-unblock.service >/dev/null 2>&1 || die "could not enable hector-wifi-unblock.service"
+fi
+if [ "$HAS_SSH" = 1 ]; then
+    info "SSH: sshd enabled, login '${SSH_USER}' (password login)"
+    USER_GROUPS=""
+    if [ "$SSH_SUDO" = 1 ]; then
+        for g in sudo adm netdev; do CH getent group "$g" >/dev/null 2>&1 && USER_GROUPS="${USER_GROUPS:+$USER_GROUPS,}$g"; done
+    fi
+    # --badname: Debian's useradd refuses upper-case letters otherwise. UID: the next free one (never 1000,
+    # that is the placeholder 'pi' which the Raspberry Pi Imager renames).
+    CH useradd --badname --create-home --shell /bin/bash ${USER_GROUPS:+--groups "$USER_GROUPS"} "$SSH_USER" \
+        || die "useradd ${SSH_USER} failed"
+    # password on stdin (not on a command line); stored as a crypt hash in /etc/shadow
+    printf '%s:%s\n' "$SSH_USER" "$SSH_PASSWORD" | CH chpasswd || die "chpasswd failed"
+    [ "$(CH passwd -S "$SSH_USER" | awk '{print $2}')" = P ] || die "the password of ${SSH_USER} was not set"
+    [ "$(CH id -u "$SSH_USER")" != 1000 ] || die "${SSH_USER} got UID 1000 (the Imager's placeholder)"
+    mkdir -p "$MNT/etc/ssh/sshd_config.d"
+    printf '# Hector9000 image: password login is intended here\nPasswordAuthentication yes\n' > "$MNT/etc/ssh/sshd_config.d/10-hector-access.conf"
+    CH systemctl enable ssh >/dev/null 2>&1 || die "could not enable ssh"
+    [ -L "$MNT/etc/systemd/system/multi-user.target.wants/ssh.service" ] || die "ssh.service is not enabled after 'systemctl enable ssh'"
+    # host keys stay out of the image: regenerate_ssh_host_keys.service (stock, enabled) makes them at the first boot
+    [ -L "$MNT/etc/systemd/system/multi-user.target.wants/regenerate_ssh_host_keys.service" ] \
+        || die "regenerate_ssh_host_keys.service is not enabled: sshd would start without host keys"
+    rm -f "$MNT"/etc/ssh/ssh_host_*
+fi
+
 # ------------------------------------------------------------------ 6. version, undo chroot tweaks
 mkdir -p "$MNT/etc/hector9000"
 {
@@ -243,6 +373,14 @@ mkdir -p "$MNT/etc/hector9000"
     echo "backend: ${BACKEND_BRANCH} ${BACKEND_REV}"
     echo "webui: ${WEBUI_BRANCH} ${WEBUI_REV}"
     echo "base: $(grep PRETTY_NAME "$MNT/etc/os-release" | cut -d= -f2- | tr -d '"')"
+    if [ "$HAS_WIFI$HAS_SSH" = 00 ]; then
+        echo "access: none"
+    else
+        # which preset was baked in (names only, never a secret); check-image.sh/boot-check.sh read this
+        echo "access: preset"
+        [ "$HAS_WIFI" = 1 ] && { echo "wifi_ssid: ${WIFI_SSID}"; echo "wifi_country: ${WIFI_COUNTRY}"; }
+        [ "$HAS_SSH" = 1 ] && { echo "ssh_user: ${SSH_USER}"; echo "ssh_sudo: $([ "$SSH_SUDO" = 1 ] && echo yes || echo no)"; }
+    fi
 } > "$MNT/etc/hector9000/image-version"
 rm -f "$MNT/usr/sbin/policy-rc.d" "$MNT/etc/resolv.conf"
 [ -z "$RESOLV_LINK" ] || ln -s "$RESOLV_LINK" "$MNT/etc/resolv.conf"
@@ -266,3 +404,5 @@ for l in "${LOOPS[@]}"; do losetup -d "$l"; done
 LOOPS=()
 ( cd "$(dirname "$OUT")" && sha256sum "$(basename "$OUT")" > "$(basename "$OUT").sha256" )
 log "Done: $OUT ($(du -h "$OUT" | cut -f1) on disk, $((TOTAL / 2048)) MiB)"
+[ "$HAS_WIFI$HAS_SSH" = 00 ] || printf '\033[33mNOTE:\033[0m this image contains the Wi-Fi/SSH credentials of the access file - do not publish it, do not upload it.\n'
+

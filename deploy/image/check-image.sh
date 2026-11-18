@@ -94,7 +94,19 @@ for o in nosuid nodev noexec nofail noatime; do echo "$DL" | grep -q "$o" && ok 
 ! ls "$W"/etc/ssh/ssh_host_* >/dev/null 2>&1 && ok "no SSH host keys in the image" || fail "SSH host keys are baked in"
 ! ls "$W/etc/init.d/resize2fs_once" "$W"/etc/rc?.d/*resize2fs_once >/dev/null 2>&1 && ok "no resize2fs_once (the system partition keeps its size)" || fail "resize2fs_once is still in the image"
 [ -z "$(find "$W/home" "$W/root" -maxdepth 2 \( -name .bash_history -o -name .lesshst -o -name .viminfo -o -name authorized_keys \) 2>/dev/null)" ] && ok "no shell history / authorized_keys" || fail "history or authorized_keys found"
-[ -z "$(find "$W/etc/NetworkManager/system-connections" -type f 2>/dev/null)" ] && ok "no Wi-Fi/network secrets (system-connections is empty)" || fail "network connections baked in"
+IV="$W/etc/hector9000/image-version"
+ivval() { sed -n "s/^$1: *//p" "$IV" 2>/dev/null | head -1; }
+ACCESS="$(ivval access)"
+NMDIR="$W/etc/NetworkManager/system-connections"
+if [ "$ACCESS" = preset ]; then
+    warn "this image was built with an access preset (credentials inside): it must not be published"
+elif [ -z "$ACCESS" ] || [ "$ACCESS" = none ]; then
+    [ -z "$(find "$NMDIR" -type f 2>/dev/null)" ] && ok "no Wi-Fi/network secrets (system-connections is empty)" || fail "network connections baked in"
+    ls "$W"/etc/systemd/system/multi-user.target.wants/ssh.service >/dev/null 2>&1 && fail "ssh.service is enabled in an image without access preset" || ok "ssh is not enabled (no access preset)"
+    ! awk -F: '$3>=1002 && $3<65000 {f=1} END {exit !f}' "$W/etc/passwd" && ok "no extra login user" || fail "an unexpected login user (uid >= 1002) exists: $(awk -F: '$3>=1002 && $3<65000 {print $1}' "$W/etc/passwd" | tr '\n' ' ')"
+else
+    fail "image-version has an unknown 'access:' value: $ACCESS"
+fi
 [ ! -s "$W/etc/wpa_supplicant/wpa_supplicant.conf" ] || ! grep -q 'psk=' "$W/etc/wpa_supplicant/wpa_supplicant.conf" 2>/dev/null && ok "no wpa_supplicant psk" || fail "wpa_supplicant.conf has a psk"
 [ ! -e "$W/etc/hector9000/firstboot.done" ] && ok "no first-boot flag (it must run on the card)" || fail "firstboot.done exists"
 [ -s "$W/etc/hector9000/image-version" ] && ok "image-version: $(tr '\n' ' ' < "$W/etc/hector9000/image-version")" || fail "no image-version"
@@ -115,6 +127,55 @@ for u in hector hector-stats; do
     pwfield="$(awk -F: -v u="$u" '$1==u {print $2}' "$W/etc/shadow")"
     case "$pwfield" in '!'*|'*'*) ok "$u has no password" ;; *) fail "$u has a password hash or empty password: '${pwfield:0:3}...'" ;; esac
 done
+
+if [ "$ACCESS" = preset ]; then
+section "Access preset (Wi-Fi / SSH)"
+# optional: HECTOR_ACCESS_FILE = the access file the image was built from, to compare the real values
+accval() { [ -n "${HECTOR_ACCESS_FILE:-}" ] && [ -f "$HECTOR_ACCESS_FILE" ] && sed -n "s/^$1=//p" "$HECTOR_ACCESS_FILE" | head -1 | tr -d '\r' | sed -e 's/^"\(.*\)"$/\1/' -e "s/^'\\(.*\\)'\$/\\1/"; }
+WSSID="$(ivval wifi_ssid)"; SUSER="$(ivval ssh_user)"
+if [ -n "$WSSID" ]; then
+    NMF="$NMDIR/hector-wifi.nmconnection"
+    [ "$(find "$NMDIR" -type f | wc -l)" = 1 ] && [ -f "$NMF" ] && ok "exactly one network profile: hector-wifi.nmconnection" || fail "network profiles: $(ls "$NMDIR" 2>&1 | tr '\n' ' ')"
+    [ "$(stat -c '%a %u:%g' "$NMF" 2>/dev/null)" = "600 0:0" ] && ok "profile is 0600 root:root (NetworkManager ignores it otherwise)" || fail "profile mode/owner: $(stat -c '%a %u:%g' "$NMF" 2>&1)"
+    grep -qx 'type=wifi' "$NMF" && grep -qx "ssid=${WSSID}" "$NMF" && grep -qx 'key-mgmt=wpa-psk' "$NMF" && grep -q '^psk=.\{8,\}' "$NMF" && ok "profile: Wi-Fi '${WSSID}', WPA-PSK, key present" || fail "profile content is not a Wi-Fi '${WSSID}' with WPA-PSK"
+    grep -qx 'autoconnect=true' "$NMF" && ok "profile: autoconnect=true" || fail "profile: autoconnect is not true"
+    [ "$(grep -c '^uuid=[0-9a-f-]\{36\}$' "$NMF")" = 1 ] && ok "profile has a uuid" || fail "profile has no valid uuid"
+    WC="$(ivval wifi_country)"
+    grep -q "cfg80211.ieee80211_regdom=${WC}\( \|$\)" "$CMD" && ok "cmdline.txt sets the Wi-Fi country (${WC})" || fail "cmdline.txt lacks cfg80211.ieee80211_regdom=${WC}"
+    [ -L "$W/etc/systemd/system/multi-user.target.wants/hector-wifi-unblock.service" ] && ok "hector-wifi-unblock.service enabled" || fail "hector-wifi-unblock.service is not enabled"
+    [ -x "$W/usr/sbin/rfkill" ] || [ -x "$W/usr/bin/rfkill" ] || [ -x "$W/sbin/rfkill" ] && ok "rfkill is installed" || warn "no rfkill binary: the unblock unit does nothing"
+    V="$(accval WIFI_PSK)"; [ -z "$V" ] || { grep -qxF "psk=${V}" "$NMF" && ok "profile psk equals WIFI_PSK of the access file" || fail "profile psk differs from the access file"; }
+    V="$(accval WIFI_SSID)"; [ -z "$V" ] || { [ "$V" = "$WSSID" ] && ok "SSID equals the access file" || fail "SSID differs from the access file"; }
+else
+    [ -z "$(find "$NMDIR" -type f 2>/dev/null)" ] && ok "no Wi-Fi profile (this preset has none)" || fail "a Wi-Fi profile exists although the preset has none"
+fi
+if [ -n "$SUSER" ]; then
+    SU_UID="$(uid_of "$SUSER")"
+    [ -n "$SU_UID" ] && [ "$SU_UID" != 1000 ] && [ "$SU_UID" -ge 1000 ] && ok "login ${SUSER} exists (uid ${SU_UID}, not the Imager's 1000)" || fail "login ${SUSER}: uid '${SU_UID}'"
+    [ "$(shell_of "$SUSER")" = /bin/bash ] && [ -d "$W/home/$SUSER" ] && ok "${SUSER}: bash, home /home/${SUSER}" || fail "${SUSER}: shell/home wrong"
+    H="$(awk -F: -v u="$SUSER" '$1==u {print $2}' "$W/etc/shadow")"
+    case "$H" in '$y$'*|'$6$'*|'$5$'*) ok "${SUSER} has a crypt hash (${H:0:3}...), no clear-text password" ;; *) fail "${SUSER}: shadow field is not a crypt hash (${H:0:3}...)" ;; esac
+    in_group() { awk -F: -v g="$1" -v u="$2" '$1==g {n=split($4,a,","); for(i=1;i<=n;i++) if(a[i]==u) f=1} END {exit !f}' "$W/etc/group"; }
+    if [ "$(ivval ssh_sudo)" = yes ]; then in_group sudo "$SUSER" && ok "${SUSER} is in group sudo (needs its password)" || fail "${SUSER} is not in group sudo"; else ! in_group sudo "$SUSER" && ok "${SUSER} is not in group sudo" || fail "${SUSER} is in group sudo"; fi
+    grep -q "^%sudo[[:space:]]*ALL=(ALL:ALL)[[:space:]]*ALL" "$W/etc/sudoers" && ok "group sudo asks for the password (stock rule)" || warn "stock %sudo rule not found in /etc/sudoers"
+    ! grep -rE "^${SUSER}[[:space:]].*NOPASSWD" "$W/etc/sudoers" "$W/etc/sudoers.d" >/dev/null 2>&1 && ok "${SUSER} has no NOPASSWD rule" || fail "a NOPASSWD rule for ${SUSER}"
+    [ -L "$W/etc/systemd/system/multi-user.target.wants/ssh.service" ] && ok "ssh.service is enabled" || fail "ssh.service is not enabled"
+    [ -L "$W/etc/systemd/system/multi-user.target.wants/regenerate_ssh_host_keys.service" ] && ok "regenerate_ssh_host_keys.service enabled (host keys are made at the first boot)" || fail "host keys would never be made"
+    grep -qx 'PasswordAuthentication yes' "$W/etc/ssh/sshd_config.d/10-hector-access.conf" 2>/dev/null && ok "sshd: password login on" || fail "sshd drop-in missing"
+    ! grep -rEi '^[[:space:]]*PermitRootLogin[[:space:]]+yes' "$W/etc/ssh" >/dev/null 2>&1 && ok "sshd: root login not enabled" || fail "sshd allows root login"
+    V="$(accval SSH_PASSWORD)"
+    if [ -n "$V" ]; then
+        # verify the hash with the image's own python/libcrypt (arm64 = the host here), password on stdin
+        R="$(printf '%s' "$V" | chroot "$W" /usr/bin/env -i /usr/bin/python3 -I -c 'import crypt,sys; pw=sys.stdin.read(); h=sys.argv[1]; print("MATCH" if crypt.crypt(pw,h)==h else "DIFFERENT")' "$H" 2>&1 | tail -1)"
+        [ "$R" = MATCH ] && ok "the shadow hash of ${SUSER} matches SSH_PASSWORD of the access file" || fail "password check for ${SUSER}: ${R}"
+        V2="$(accval SSH_USER)"; [ "$V2" = "$SUSER" ] && ok "login name equals the access file" || fail "login name differs from the access file"
+    else
+        warn "HECTOR_ACCESS_FILE not set: the password hash was not compared with the intended password"
+    fi
+else
+    ! [ -L "$W/etc/systemd/system/multi-user.target.wants/ssh.service" ] && ok "ssh is not enabled (this preset has no login)" || fail "ssh enabled although the preset has no login"
+fi
+fi
 
 section "Services"
 WANTS="$W/etc/systemd/system"

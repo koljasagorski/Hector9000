@@ -55,6 +55,31 @@ case "$phase" in
     ! id pi >/dev/null 2>&1 && ok "no user pi any more" || fail "user pi still exists"
     [ "$(passwd -S qemutester 2>/dev/null | awk '{print $2}')" = P ] && ok "qemutester has a password" || fail "qemutester has no usable password: $(passwd -S qemutester 2>&1)"
     [ "$(hostname)" = hector-qemu ] && ok "hostname from custom.toml" || fail "hostname is '$(hostname)'"
+    # access preset baked into the image (only if the image has one): SSH login and Wi-Fi profile
+    iv_access="$(sed -n 's/^access: *//p' /etc/hector9000/image-version 2>/dev/null | head -1)"
+    iv_user="$(sed -n 's/^ssh_user: *//p' /etc/hector9000/image-version 2>/dev/null | head -1)"
+    iv_ssid="$(sed -n 's/^wifi_ssid: *//p' /etc/hector9000/image-version 2>/dev/null | head -1)"
+    info "access preset: ${iv_access:-none} (ssh login: ${iv_user:-none}, wifi: ${iv_ssid:-none})"
+    if [ -n "$iv_user" ]; then
+        for _ in $(seq 1 30); do systemctl is-active --quiet ssh && break; sleep 2; done
+        check "ssh.service is enabled" systemctl is-enabled --quiet ssh
+        check "ssh.service is active" systemctl is-active --quiet ssh
+        ss -ltnH | awk '{print $4}' | grep -qE '(^|:)22$' && ok "sshd listens on port 22" || fail "nothing listens on port 22"
+        [ -n "$(find /etc/ssh -name 'ssh_host_*_key' 2>/dev/null)" ] && ok "SSH host keys were made at this boot (not baked into the image)" || fail "no SSH host keys after the first boot"
+        [ "$(id -u "$iv_user" 2>/dev/null)" != 1000 ] && [ -n "$(id -u "$iv_user" 2>/dev/null)" ] && ok "login $iv_user exists (uid $(id -u "$iv_user"))" || fail "login $iv_user missing or uid 1000"
+        [ "$(passwd -S "$iv_user" 2>/dev/null | awk '{print $2}')" = P ] && ok "$iv_user has a password" || fail "$iv_user has no usable password: $(passwd -S "$iv_user" 2>&1)"
+        # the logins side by side: the Imager's user (uid 1000) and the baked-in one
+        [ "$(id -un 1000 2>/dev/null)" = qemutester ] && ok "the Imager customisation still renamed pi to qemutester next to $iv_user" || fail "uid 1000 is '$(id -un 1000 2>/dev/null)'"
+        sshd -T 2>/dev/null | grep -qi '^passwordauthentication yes' && ok "sshd -T: password authentication yes" || fail "sshd -T: password authentication is not on"
+        sshd -T 2>/dev/null | grep -qi '^permitrootlogin \(yes\)' && fail "sshd allows root login" || ok "sshd does not allow root login with a password"
+    fi
+    if [ -n "$iv_ssid" ]; then
+        for _ in $(seq 1 20); do nmcli -t -f NAME connection show 2>/dev/null | grep -qx "$iv_ssid" && break; sleep 2; done
+        nmcli -t -f NAME,TYPE connection show 2>/dev/null | grep -qx "$iv_ssid:802-11-wireless" && ok "NetworkManager loaded the Wi-Fi profile '$iv_ssid'" || fail "NetworkManager does not list the Wi-Fi profile '$iv_ssid': $(nmcli -t -f NAME,TYPE connection show 2>&1 | tr '\n' ' ')"
+        [ "$(nmcli -g connection.autoconnect connection show "$iv_ssid" 2>/dev/null)" = yes ] && ok "profile '$iv_ssid' has autoconnect=yes" || fail "profile '$iv_ssid': autoconnect is $(nmcli -g connection.autoconnect connection show "$iv_ssid" 2>&1)"
+        grep -q 'cfg80211.ieee80211_regdom=' /proc/cmdline && ok "Wi-Fi country on the kernel command line" || fail "no cfg80211.ieee80211_regdom on the command line"
+        info "no Wi-Fi hardware in QEMU: the join itself cannot be tested here (wifi devices: $(nmcli -t -f DEVICE,TYPE device 2>/dev/null | grep -c ':wifi$'))"
+    fi
     # the stock rename dialog (VT8) must not have blocked the boot; tty1 belongs to the kiosk
     ust="$(systemctl is-active userconfig 2>/dev/null)"
     [ "$ust" != active ] && [ "$ust" != activating ] && ok "userconfig (rename dialog) is $ust" || fail "userconfig is $ust"
